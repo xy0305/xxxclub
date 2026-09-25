@@ -9,6 +9,7 @@ import SwiftUI
 
 struct MineView: View {
     @StateObject private var library = LibraryStore.shared
+    @StateObject private var subs = SubscriptionStore.shared
 
     var body: some View {
         NavigationStack {
@@ -20,6 +21,16 @@ struct MineView: View {
                         LabeledContent("离线播放") {
                             Text(Pan115Settings.shared.isConfigured ? "已设置" : "未设置")
                                 .foregroundStyle(Pan115Settings.shared.isConfigured ? .green : .secondary)
+                        }
+                    }
+                }
+                Section("订阅") {
+                    NavigationLink {
+                        SubscriptionsView()
+                    } label: {
+                        LabeledContent("厂牌订阅") {
+                            Text(subs.items.isEmpty ? "未订阅" : "\(subs.items.count)")
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }

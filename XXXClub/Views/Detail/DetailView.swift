@@ -17,6 +17,7 @@ struct DetailView: View {
     @State private var play115 = false
     @State private var pushMessage: String?
     @StateObject private var library = LibraryStore.shared
+    @StateObject private var subs = SubscriptionStore.shared
     @Environment(\.openURL) private var openURL
 
     private var torrent: XCTorrent? { detail?.torrent ?? preview }
@@ -134,6 +135,15 @@ struct DetailView: View {
                 }
                 .xcGlassButton()
                 .disabled(torrent == nil)
+
+                Button {
+                    subscribeStudio()
+                } label: {
+                    Image(systemName: subscribed ? "bell.fill" : "bell")
+                        .frame(width: 28)
+                }
+                .xcGlassButton()
+                .disabled(studioQuery.count < 3)
             }
             if let pushMessage {
                 Text(pushMessage)
@@ -288,5 +298,20 @@ struct DetailView: View {
     private func openMagnet() {
         guard let magnet = detail?.magnet, let url = URL(string: magnet) else { return }
         openURL(url)
+    }
+
+    private var studioQuery: String {
+        SubscriptionStore.studioQuery(from: torrent?.title ?? "")
+    }
+
+    private var subscribed: Bool {
+        subs.contains(studioQuery)
+    }
+
+    private func subscribeStudio() {
+        guard studioQuery.count >= 3 else { return }
+        subs.toggle(query: studioQuery)
+        GlassHaptic.tap()
+        pushMessage = subscribed ? "已订阅 \(studioQuery)，有新片会推最高画质到 115" : "已取消订阅"
     }
 }

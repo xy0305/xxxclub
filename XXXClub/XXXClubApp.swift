@@ -11,6 +11,7 @@ struct XXXClubApp: App {
         WindowGroup {
             ContentView()
                 .tint(XCPalette.accent)
+                .task { await SubscriptionStore.shared.checkNow() }
         }
     }
 }
