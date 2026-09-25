@@ -9,10 +9,23 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AA0000000000000000000001 /* XXXClub */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA0000000000000000000011 /* Exceptions for "XXXClub" folder in "XXXClub" target */,
+			);
 			path = XXXClub;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA0000000000000000000011 /* Exceptions for "XXXClub" folder in "XXXClub" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AA0000000000000000000006 /* XXXClub */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileReference section */
 		AA0000000000000000000002 /* XXXClub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = XXXClub.app; sourceTree = BUILT_PRODUCTS_DIR; };
