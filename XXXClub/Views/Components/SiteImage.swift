@@ -2,7 +2,8 @@
 //  SiteImage.swift
 //  XXXClub
 //
-//  imgxclub.com 不带浏览器 User-Agent 会 403。AsyncImage 不带请求头，所以封面全空。
+//  封面走系统图片加载。自定义请求偶发被取消或被站点拒绝时，灰块会一直停着。
+//  失败后换浏览器头重试一次。
 //
 
 import SwiftUI
@@ -40,21 +41,32 @@ struct SiteImage: View {
             image = cached
             return
         }
-        var req = URLRequest(url: url)
-        req.setValue(SiteImageCache.userAgent, forHTTPHeaderField: "User-Agent")
-        req.setValue("https://xxxclub.to/", forHTTPHeaderField: "Referer")
-        req.timeoutInterval = 20
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let decoded = UIImage(data: data) else {
-                failed = true
-                return
-            }
+        if let decoded = await fetch(url, headers: false) ?? await fetch(url, headers: true) {
             SiteImageCache.store(decoded, for: url)
             image = decoded
-        } catch {
+        } else if !Task.isCancelled {
             failed = true
+        }
+    }
+
+    private func fetch(_ url: URL, headers: Bool) async -> UIImage? {
+        var req = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 25)
+        if headers {
+            req.setValue(SiteImageCache.userAgent, forHTTPHeaderField: "User-Agent")
+            req.setValue("https://xxxclub.to/", forHTTPHeaderField: "Referer")
+            req.setValue("image/jpeg,image/png,image/*;q=0.8", forHTTPHeaderField: "Accept")
+        }
+        let config = URLSessionConfiguration.default
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        config.urlCache = URLCache.shared
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        do {
+            let (data, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            return UIImage(data: data)
+        } catch {
+            return nil
         }
     }
 }
