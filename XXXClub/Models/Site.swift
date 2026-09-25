@@ -108,3 +108,12 @@ enum XCFeed: Hashable {
         }
     }
 }
+
+extension XCTorrent {
+    static func placeholder(id: String) -> XCTorrent {
+        XCTorrent(
+            id: id, title: "", coverURL: nil, categoryID: "", categoryName: "",
+            added: "", size: "", seeders: 0, leechers: 0, uploader: "", rank: nil
+        )
+    }
+}

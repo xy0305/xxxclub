@@ -44,11 +44,7 @@ struct DetailView: View {
         .nestedListChrome()
         .task { await load() }
         .fullScreenCover(isPresented: $play115) {
-            Pan115PlayerView(
-                torrentID: id,
-                title: torrent?.title ?? "",
-                magnet: detail?.magnet ?? ""
-            )
+            Pan115PlayerView(movie: torrent ?? XCTorrent.placeholder(id: id), magnetURL: detail?.magnet)
         }
     }
 

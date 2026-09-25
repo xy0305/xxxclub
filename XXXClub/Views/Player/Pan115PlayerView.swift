@@ -1,40 +1,46 @@
 //
 //  Pan115PlayerView.swift
-//  XXXClub
+//  AVDB
 //
-//  先在 115 里按标题找已完成的文件。找不到就推磁力，等离线完成再播。
-//  用系统 AVPlayer，请求头和换链 UA 保持一致。
+//  按番号全盘搜索 115 文件（对齐 Forward 模块 files/search），KSPlayer 播最高清晰度。
 //
 
 import SwiftUI
-import AVKit
+import KSPlayer
 
 struct Pan115PlayerView: View {
-    let torrentID: String
-    let title: String
-    let magnet: String
+    let movie: XCTorrent
+    var magnetURL: String? = nil
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = Pan115PlayerViewModel()
+    @State private var showEpisodes = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
-            if let player = vm.player, vm.errorMessage == nil {
-                VideoPlayer(player: player)
-                    .ignoresSafeArea()
+            if let url = vm.playURL, vm.errorMessage == nil, !vm.isLoading {
+                KSChromePlayer(
+                    url: url,
+                    title: movie.title,
+                    subtitle: vm.qualityLabel,
+                    headers: vm.headers
+                )
             } else if let err = vm.errorMessage {
                 ContentUnavailableView {
                     Label("无法播放", systemImage: "exclamationmark.triangle")
                 } description: {
                     Text(err)
                 } actions: {
-                    Button("重试") { Task { await vm.start(id: torrentID, title: title, magnet: magnet) } }
+                    Button("重试") {
+                        Task { await vm.start(movie: movie, magnetURL: magnetURL) }
+                    }
                     Button("关闭") { dismiss() }
                 }
                 .foregroundStyle(.white)
             } else {
                 VStack(spacing: 16) {
-                    ProgressView().tint(.white)
+                    ProgressView()
+                        .tint(.white)
                     Text(vm.status)
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.85))
@@ -45,126 +51,212 @@ struct Pan115PlayerView: View {
                 }
             }
 
-            if vm.player == nil || vm.errorMessage != nil {
+            if vm.playURL != nil, vm.episodes.count > 1 {
+                HStack {
+                    Spacer()
+                    Button { showEpisodes = true } label: {
+                        Image(systemName: "rectangle.stack.badge.play")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(12)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 12)
+                .padding(.trailing, 12)
+            }
+
+            if vm.playURL == nil || vm.errorMessage != nil {
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .background(.black.opacity(0.35), in: Circle())
+                        .frame(width: 52, height: 52)
+                        .contentShape(Rectangle())
                 }
-                .padding(.leading, 16)
-                .padding(.top, 12)
+                .buttonStyle(.plain)
+                .padding(.leading, 20)
+                .padding(.top, 16)
             }
         }
-        .task { await vm.start(id: torrentID, title: title, magnet: magnet) }
-        .onDisappear { vm.stop() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbar(.hidden, for: .navigationBar)
+        .task { await vm.start(movie: movie, magnetURL: magnetURL) }
+        .confirmationDialog("选择集数", isPresented: $showEpisodes) {
+            ForEach(Array(vm.episodes.enumerated()), id: \.element.fileID) { index, file in
+                Button(episodeTitle(index: index, name: file.name)) {
+                    Task { await vm.selectEpisode(index) }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        }
+    }
+
+    /// 4K、文件名含 -c（中文）、restored（破解）标在集数后面。
+    private func episodeTitle(index: Int, name: String) -> String {
+        let lower = name.lowercased()
+        var marks: [String] = []
+        if lower.contains("4k") || lower.contains("2160") { marks.append("4K") }
+        if lower.range(of: #"(^|[^a-z0-9])-c([^a-z0-9]|$)"#, options: .regularExpression) != nil
+            || lower.contains("-c.")
+            || lower.contains("中字")
+            || lower.contains("中文") {
+            marks.append("-c")
+        }
+        if lower.contains("restored") { marks.append("restored") }
+        let base = "第 \(index + 1) 集"
+        return marks.isEmpty ? base : base + "  " + marks.joined(separator: " ")
     }
 }
 
 @MainActor
 final class Pan115PlayerViewModel: ObservableObject {
+    @Published var isLoading = false
     @Published var status = "准备中…"
     @Published var errorMessage: String?
-    @Published var player: AVPlayer?
+    @Published var fileName = ""
+    @Published var episodes: [Pan115Client.FileItem] = []
+    @Published var playURL: URL?
+    @Published var streams: [Pan115Client.PlayStream] = []
+    @Published var qualityLabel = "原画"
 
-    func start(id: String, title: String, magnet: String) async {
+    var headers: [String: String] {
+        Pan115Client.playHeaders(cookie: Pan115Settings.shared.cookie)
+    }
+
+    func start(movie: XCTorrent, magnetURL: String?) async {
         let settings = Pan115Settings.shared
         guard settings.isConfigured else {
             errorMessage = settings.missingHint
             return
         }
+        isLoading = true
         errorMessage = nil
-        player = nil
+        playURL = nil
+        streams = []
+        defer { isLoading = false }
+
         let cookie = settings.cookie
         let cid = settings.folderCID
-        let saved = Pan115PlaybackCache.magnet(for: id)
-        let link = magnet.isEmpty ? (saved ?? "") : magnet
+        let keyword = movie.title
+        let magnet = magnetURL
+            ?? Pan115PlaybackCache.magnet(for: movie.id)
+            ?? ""
 
         do {
-            status = "正在 115 中查找…"
-            if let file = try? await firstPlayable(keyword: title, cookie: cookie) {
-                try await play(file: file, cookie: cookie)
+            status = "正在 115 中搜索 \(keyword)…"
+            if let existing = try? await Pan115Client.shared.findMatchedVideos(
+                keyword: keyword, cookie: cookie, limit: 100
+            ) {
+                episodes = existing
+                try await play(file: existing[0], cookie: cookie)
                 return
             }
-            guard !link.isEmpty else { throw Pan115Error.fileNotFound }
+
+            if magnet.isEmpty {
+                throw Pan115Error.fileNotFound
+            }
 
             status = "正在推送到 115 离线…"
-            let result = try await Pan115Client.shared.addOfflineTask(url: link, cookie: cookie, folderCID: cid)
-            Pan115PlaybackCache.save(id: id, magnet: link)
+            let result = try await Pan115Client.shared.addOfflineTask(
+                url: magnet, cookie: cookie, folderCID: cid)
+            Pan115PlaybackCache.save(movieID: movie.id, magnet: magnet)
             switch result {
-            case .failed(let msg): throw Pan115Error.api(msg)
-            case .exists: status = "任务已存在，等待完成…"
-            case .success: status = "已推送，等待离线完成…"
+            case .failed(let msg):
+                throw Pan115Error.api(msg)
+            case .exists:
+                status = "任务已存在，正在打开已下载文件…"
+            case .success:
+                status = "已推送，等待离线完成…"
             }
-            let file = try await waitUntilPlayable(keyword: title, cookie: cookie, timeout: result == .exists ? 45 : 180)
-            try await play(file: file, cookie: cookie)
+
+            let files = try await waitUntilPlayable(
+                keyword: keyword, cookie: cookie, folderCID: cid,
+                timeout: result == .exists ? 45 : 90)
+            episodes = files
+            try await play(file: files[0], cookie: cookie)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    func stop() {
-        player?.pause()
-        player = nil
+    func select(_ stream: Pan115Client.PlayStream) {
+        qualityLabel = stream.name
+        playURL = URL(string: stream.url)
     }
 
-    private func waitUntilPlayable(keyword: String, cookie: String, timeout: TimeInterval) async throws -> Pan115Client.FileItem {
+    func selectEpisode(_ index: Int) async {
+        guard episodes.indices.contains(index) else { return }
+        isLoading = true
+        errorMessage = nil
+        playURL = nil
+        do {
+            try await play(file: episodes[index], cookie: Pan115Settings.shared.cookie)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    private func waitUntilPlayable(
+        keyword: String, cookie: String, folderCID: String, timeout: TimeInterval
+    ) async throws -> [Pan115Client.FileItem] {
         let start = Date()
         while Date().timeIntervalSince(start) < timeout {
-            if let file = try? await firstPlayable(keyword: keyword, cookie: cookie) {
-                return file
+            if let files = try? await Pan115Client.shared.findMatchedVideos(
+                keyword: keyword, cookie: cookie, limit: 100
+            ), !files.isEmpty {
+                return files
+            }
+            if let file = try? await Pan115Client.shared.findMatchedVideo(
+                keyword: keyword, cookie: cookie, folderCID: folderCID, requireMatch: true
+            ) {
+                return [file]
             }
             let tasks = (try? await Pan115Client.shared.listOfflineTasks(cookie: cookie)) ?? []
-            if let hit = tasks.first(where: { task in
-                task.name.localizedCaseInsensitiveContains(keyword)
-                    || keyword.localizedCaseInsensitiveContains(task.name)
-                    || (!task.infoHash.isEmpty && keyword.localizedCaseInsensitiveContains(task.infoHash))
+            if let hit = tasks.first(where: {
+                $0.name.localizedCaseInsensitiveContains(keyword)
+                    || $0.url.localizedCaseInsensitiveContains(keyword)
             }) {
                 if hit.isFailed { throw Pan115Error.taskFailed(hit.name) }
-                if hit.isRunning { status = "离线中 \(Int(hit.percent))%…" }
+                if hit.isRunning {
+                    status = "离线中 \(Int(hit.percent))%…"
+                }
             } else {
                 status = "任务已完成，正在匹配文件…"
             }
-            try await Task.sleep(nanoseconds: 3_000_000_000)
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+        if let files = try? await Pan115Client.shared.findMatchedVideos(
+            keyword: keyword, cookie: cookie, limit: 100
+        ), !files.isEmpty {
+            return files
         }
         throw Pan115Error.timeout
     }
 
-    private func firstPlayable(keyword: String, cookie: String) async throws -> Pan115Client.FileItem {
-        let files = try await Pan115Client.shared.findMatchedVideos(keyword: keyword, cookie: cookie)
-        guard let file = files.first else { throw Pan115Error.fileNotFound }
-        return file
-    }
-
     private func play(file: Pan115Client.FileItem, cookie: String) async throws {
-        status = "获取播放地址…"
-        let streams = try await Pan115Client.shared.streamsForVideo(
+        fileName = file.name
+        status = "获取 115 播放地址…"
+        let list = try await Pan115Client.shared.streamsForVideo(
             pickCode: file.pickCode, cookie: cookie, filename: file.name)
-        guard let best = streams.first, let url = URL(string: best.url) else {
+        streams = list
+        guard let best = list.first, let url = URL(string: best.url) else {
             throw Pan115Error.playURLNotFound
         }
-        let headers = Pan115Client.playHeaders(cookie: cookie)
-        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-        let item = AVPlayerItem(asset: asset)
-        let player = AVPlayer(playerItem: item)
-        self.player = player
-        player.play()
+        qualityLabel = best.name
+        playURL = url
     }
 }
 
 enum Pan115PlaybackCache {
-    private static func key(_ id: String) -> String { "xxxclub.115.magnet.\(id)" }
+    private static func key(_ movieID: String) -> String { "avdb.115.lastMagnet.\(movieID)" }
 
-    static func save(id: String, magnet: String) {
-        UserDefaults.standard.set(magnet, forKey: key(id))
+    static func save(movieID: String, magnet: String) {
+        UserDefaults.standard.set(magnet, forKey: key(movieID))
     }
 
-    static func magnet(for id: String) -> String? {
-        UserDefaults.standard.string(forKey: key(id))
-    }
-
-    static func hasMagnet(_ id: String) -> Bool {
-        !(magnet(for: id) ?? "").isEmpty
+    static func magnet(for movieID: String) -> String? {
+        UserDefaults.standard.string(forKey: key(movieID))
     }
 }

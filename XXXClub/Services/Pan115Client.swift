@@ -1,14 +1,15 @@
 //
 //  Pan115Client.swift
-//  XXXClub
+//  AVDB
 //
-//  从 AVDB 搬过来的 115 离线：Cookie + 目录 CID，磁力推送后按标题找视频，再取原画地址。
-//  换链 UA 必须和播放器一致，否则 CDN 会 403。
+//  115 网盘离线下载：Cookie + 目录 CID，磁力/ed2k 一键推送。
+//  接口对齐参考脚本：sign = /?ct=offline&ac=space，add = /web/lixian/?ct=lixian&ac=add_task_url
 //
 
 import Foundation
 import Combine
 
+/// 115 离线推送结果
 public enum Pan115PushResult: Equatable {
     case success
     case exists
@@ -23,6 +24,7 @@ public enum Pan115PushResult: Equatable {
     }
 }
 
+/// 115 Cookie / 目录 CID 本地配置
 public final class Pan115Settings: ObservableObject, @unchecked Sendable {
     public static let shared = Pan115Settings()
 
@@ -34,8 +36,8 @@ public final class Pan115Settings: ObservableObject, @unchecked Sendable {
     }
 
     private enum Keys {
-        static let cookie = "xxxclub.115.cookie"
-        static let folderCID = "xxxclub.115.folderCID"
+        static let cookie = "avdb.115.cookie"
+        static let folderCID = "avdb.115.folderCID"
     }
 
     private init() {
@@ -45,8 +47,7 @@ public final class Pan115Settings: ObservableObject, @unchecked Sendable {
 
     public var isConfigured: Bool {
         let c = Self.normalizeCookie(cookie)
-        return c.contains("UID=") && c.contains("CID=") && c.contains("SEID=")
-            && !folderCID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return c.contains("UID=") && c.contains("CID=") && c.contains("SEID=") && !folderCID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     public var missingHint: String {
@@ -78,13 +79,18 @@ public final class Pan115Settings: ObservableObject, @unchecked Sendable {
     }
 }
 
+/// 115 离线任务客户端
 public final class Pan115Client: @unchecked Sendable {
     public static let shared = Pan115Client()
 
-    /// 必须与播放器 UA 一致。Safari iPhone UA 换到的 CDN 链不需要再带 Cookie。
-    static let safariUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
-
     private let session: URLSession
+    /// 删除接口专用 session：webapi.115.com/rb/delete 在 iOS 上 HTTP/2 会 SSL EOF，
+    /// 用独立 ephemeral session + 强制关闭连接复用，尽量走 HTTP/1.1。
+    private let deleteSession: URLSession
+    /// 必须与播放器 UA 一致，否则 115 按 UA 绑定的 m3u8 会 403。
+    static let safariUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"
+
+    private var userAgent: String { Self.safariUA }
 
     private init() {
         let config = URLSessionConfiguration.ephemeral
@@ -93,44 +99,17 @@ public final class Pan115Client: @unchecked Sendable {
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
         session = URLSession(configuration: config)
+
+        let delConfig = URLSessionConfiguration.ephemeral
+        delConfig.timeoutIntervalForRequest = 20
+        delConfig.timeoutIntervalForResource = 40
+        delConfig.httpShouldSetCookies = false
+        delConfig.httpCookieAcceptPolicy = .never
+        delConfig.httpShouldUsePipelining = false
+        deleteSession = URLSession(configuration: delConfig)
     }
 
-    public struct OfflineTask {
-        public let name: String
-        public let status: Int
-        public let percent: Double
-        public let infoHash: String
-        public let fileID: String
-        public let dirID: String
-        public let url: String
-
-        public var isDone: Bool { status == 2 }
-        public var isFailed: Bool { status == -1 }
-        public var isRunning: Bool { status == 0 || status == 1 }
-    }
-
-    public struct FileItem: Identifiable {
-        public let name: String
-        public let pickCode: String
-        public let fileID: String
-        public let cid: String
-        public let isDir: Bool
-        public let size: Int64
-
-        public var id: String { fileID.isEmpty ? pickCode : fileID }
-
-        public var isVideo: Bool {
-            let n = name.lowercased()
-            return [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m2ts", ".webm", ".m4v"].contains { n.hasSuffix($0) }
-        }
-    }
-
-    public struct PlayStream {
-        public let name: String
-        public let url: String
-        public let bandwidth: Int
-    }
-
+    /// 推送一条磁力 / ed2k / http 链接到 115 离线
     public func addOfflineTask(url magnet: String, cookie: String, folderCID: String) async throws -> Pan115PushResult {
         let cookie = Pan115Settings.normalizeCookie(cookie)
         let folder = folderCID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -149,7 +128,7 @@ public final class Pan115Client: @unchecked Sendable {
             time = s.time
         }
 
-        var parts = [
+        var parts: [String] = [
             "url=\(link.formEncoded)",
             "wp_path_id=\(folder.formEncoded)",
         ]
@@ -158,11 +137,15 @@ public final class Pan115Client: @unchecked Sendable {
             parts.append("sign=\(sign.formEncoded)")
             parts.append("time=\(time.formEncoded)")
         }
-        var req = URLRequest(url: URL(string: "https://115.com/web/lixian/?ct=lixian&ac=add_task_url")!)
+        let body = parts.joined(separator: "&")
+
+        let endpoint = URL(string: "https://115.com/web/lixian/?ct=lixian&ac=add_task_url")!
+        var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
-        req.httpBody = parts.joined(separator: "&").data(using: .utf8)
+        req.httpBody = body.data(using: .utf8)
         req.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         appendCommonHeaders(&req, cookie: cookie)
+
         let (data, response) = try await session.data(for: req)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             throw Pan115Error.http(http.statusCode)
@@ -170,9 +153,85 @@ public final class Pan115Client: @unchecked Sendable {
         return parseResult(data)
     }
 
+    // MARK: - 离线任务 / 原画播放
+
+    public struct OfflineTask {
+        public let name: String
+        public let status: Int
+        public let percent: Double
+        public let infoHash: String
+        public let fileID: String
+        public let dirID: String
+        public let url: String
+
+        public var isDone: Bool { status == 2 }
+        public var isFailed: Bool { status == -1 }
+        public var isRunning: Bool { status == 0 || status == 1 }
+    }
+
+    public struct FileItem {
+        public let name: String
+        public let pickCode: String
+        public let fileID: String
+        public let cid: String
+        public let isDir: Bool
+        public let size: Int64
+
+        public var isVideo: Bool {
+            let n = name.lowercased()
+            return [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m2ts", ".webm", ".m4v", ".iso"].contains { n.hasSuffix($0) }
+        }
+    }
+
+    public struct PlayStream {
+        public let name: String
+        public let url: String
+        public let bandwidth: Int
+    }
+
+    /// 轮询离线任务直到完成（默认 90 秒）
+    public func waitOfflineReady(
+        keyword: String,
+        cookie: String,
+        timeout: TimeInterval = 90
+    ) async throws -> OfflineTask {
+        let cookie = Pan115Settings.normalizeCookie(cookie)
+        let needle = keyword.lowercased()
+        let start = Date()
+        var last: OfflineTask?
+        while Date().timeIntervalSince(start) < timeout {
+            let tasks = (try? await listOfflineTasks(cookie: cookie)) ?? []
+            if let hit = tasks.first(where: { task in
+                task.name.lowercased().contains(needle)
+                    || task.url.lowercased().contains(needle)
+                    || (!task.infoHash.isEmpty && needle.contains(task.infoHash.lowercased()))
+            }) {
+                last = hit
+                if hit.isDone { return hit }
+                if hit.isFailed { throw Pan115Error.taskFailed(hit.name) }
+            } else if let file = try? await findMatchedVideo(keyword: keyword, cookie: cookie, requireMatch: true) {
+                // 已完成任务会从 task_lists 消失，文件在网盘里就能播。
+                return OfflineTask(
+                    name: file.name, status: 2, percent: 100,
+                    infoHash: "", fileID: file.fileID, dirID: file.cid, url: ""
+                )
+            }
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+        if let last, last.isDone { return last }
+        if let file = try? await findMatchedVideo(keyword: keyword, cookie: cookie, requireMatch: true) {
+            return OfflineTask(
+                name: file.name, status: 2, percent: 100,
+                infoHash: "", fileID: file.fileID, dirID: file.cid, url: ""
+            )
+        }
+        throw Pan115Error.timeout
+    }
+
     public func listOfflineTasks(cookie: String, page: Int = 1) async throws -> [OfflineTask] {
         let url = URL(string: "https://115.com/web/lixian/?ct=lixian&ac=task_lists&page=\(page)")!
         var req = URLRequest(url: url)
+        req.httpMethod = "GET"
         appendCommonHeaders(&req, cookie: cookie)
         let obj = try await json(for: req)
         let raw = (obj["tasks"] as? [[String: Any]])
@@ -191,9 +250,10 @@ public final class Pan115Client: @unchecked Sendable {
         }
     }
 
-    public func listFiles(cid: String, cookie: String, limit: Int = 200) async throws -> [FileItem] {
-        let q = "aid=1&cid=\(cid.formEncoded)&o=user_ptime&asc=0&offset=0&show_dir=1&limit=\(limit)&natsort=1&format=json"
+    public func listFiles(cid: String, cookie: String, limit: Int = 115) async throws -> [FileItem] {
+        let q = "aid=1&cid=\(cid.formEncoded)&o=user_ptime&asc=0&offset=0&show_dir=1&limit=\(limit)&natsort=1&record_open_time=1&format=json"
         let urls = [
+            "https://aps.115.com/natsort/files.php?\(q)",
             "https://proapi.115.com/android/2.0/ufile/files?\(q)",
             "https://webapi.115.com/files?\(q)",
         ]
@@ -201,11 +261,13 @@ public final class Pan115Client: @unchecked Sendable {
         for u in urls {
             guard let url = URL(string: u) else { continue }
             var req = URLRequest(url: url)
+            req.httpMethod = "GET"
             appendCommonHeaders(&req, cookie: cookie)
             do {
-                let obj = try await json(for: req)
+                let obj = try await json(for: req, retries: 1)
                 let files = extractFileList(obj)
-                if boolState(obj["state"]) || !files.isEmpty { return files }
+                let ok = boolState(obj["state"]) || !files.isEmpty
+                if ok { return files }
             } catch {
                 lastError = error
             }
@@ -213,8 +275,52 @@ public final class Pan115Client: @unchecked Sendable {
         throw lastError
     }
 
-    /// 按标题关键词在 115 全盘找视频。xxxclub 没有番号，用厂牌和日期片段匹配。
-    public func findMatchedVideos(keyword: String, cookie: String, limit: Int = 40) async throws -> [FileItem] {
+    /// 获取离线父目录当前的子文件夹 ID，必须在推送磁力之前调用。
+    public func folderSnapshot(cid: String, cookie: String) async -> Set<String> {
+        guard let files = try? await listFiles(cid: cid, cookie: cookie, limit: 500) else { return [] }
+        return Set(files.filter { $0.isDir }
+            .map { $0.fileID.isEmpty ? $0.cid : $0.fileID }
+            .filter { !$0.isEmpty })
+    }
+
+    /// 全盘按番号搜索。
+    /// 注意：`webapi.115.com` 在部分网络/客户端下会稳定触发 SSL EOF（UNEXPECTED_EOF_WHILE_READING），
+    /// 而 `proapi.115.com` / `aps.115.com` 通常正常。把可用的域名排前面，webapi 降级为后备。
+    public func searchFiles(keyword: String, cookie: String, limit: Int = 30) async throws -> [FileItem] {
+        let kw = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let encoded = (kw.isEmpty ? ".mp4" : kw).formEncoded
+        let urls = [
+            "https://proapi.115.com/android/2.0/ufile/search?search_value=\(encoded)&limit=\(limit)&offset=0&type=4&format=json",
+            "https://aps.115.com/natsort/files.php?search_value=\(encoded)&type=4&limit=\(limit)&offset=0&format=json",
+            "https://webapi.115.com/files/search?search_value=\(encoded)&limit=\(limit)&offset=0&type=4&format=json",
+            "https://webapi.115.com/files/search?search_value=\(encoded)&limit=\(limit)&offset=0&format=json",
+        ]
+        var lastError: Error = Pan115Error.fileNotFound
+        for u in urls {
+            guard let url = URL(string: u) else { continue }
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            appendCommonHeaders(&req, cookie: cookie)
+            do {
+                let obj = try await json(for: req, retries: 1)
+                let files = extractFileList(obj)
+                if !files.isEmpty { return files }
+                if boolState(obj["state"]) { return [] }
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    /// 按番号匹配 115 的全部视频文件，支持同一番号多集。
+    public func findMatchedVideos(
+        keyword: String,
+        cookie: String,
+        limit: Int = 100
+    ) async throws -> [FileItem] {
+        let needle = normalizedKey(keyword)
+        guard !needle.isEmpty else { throw Pan115Error.fileNotFound }
         var result: [FileItem] = []
         var lastError: Error = Pan115Error.fileNotFound
         for variant in searchKeywords(from: keyword) {
@@ -226,195 +332,493 @@ public final class Pan115Client: @unchecked Sendable {
                 continue
             }
             let hits = files.filter { file in
-                !file.isDir && file.isVideo && !file.pickCode.isEmpty && nameMatches(file.name, keyword: keyword)
+                !file.isDir && file.isVideo && !file.pickCode.isEmpty
+                    && nameMatches(file.name, keyword: keyword)
             }
-            let known = Set(result.map(\.id))
-            result.append(contentsOf: hits.filter { !known.contains($0.id) })
+            let known = Set(result.map { $0.fileID.isEmpty ? $0.pickCode : $0.fileID })
+            result.append(contentsOf: hits.filter {
+                !known.contains($0.fileID.isEmpty ? $0.pickCode : $0.fileID)
+            })
         }
         guard !result.isEmpty else { throw lastError }
-        return result.sorted { $0.size > $1.size }
+        return result.sorted { lhs, rhs in
+            let left = episodeNumber(lhs.name)
+            let right = episodeNumber(rhs.name)
+            if left != right { return left < right }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
     }
 
-    public func searchFiles(keyword: String, cookie: String, limit: Int = 30) async throws -> [FileItem] {
-        let encoded = keyword.trimmingCharacters(in: .whitespacesAndNewlines).formEncoded
-        let urls = [
-            "https://proapi.115.com/android/2.0/ufile/search?search_value=\(encoded)&limit=\(limit)&offset=0&type=4&format=json",
-            "https://webapi.115.com/files/search?search_value=\(encoded)&limit=\(limit)&offset=0&type=4&format=json",
+    /// 按番号匹配 115 文件：全盘番号搜索优先命中，目录列举与浅层递归兜底。
+    public func findMatchedVideo(
+        keyword: String,
+        cookie: String,
+        folderCID: String? = nil,
+        requireMatch: Bool = true
+    ) async throws -> FileItem {
+        let needle = normalizedKey(keyword)
+        guard !needle.isEmpty else { throw Pan115Error.fileNotFound }
+
+        // 1) 全盘番号搜索（多关键词变体，命中立即返回）。
+        //    这是唯一可靠且快速的路径：115 的「目录内 search_value」不递归子目录，
+        //    而「全盘 .mp4」返回全站几十万条，无法定位具体番号——两者都不可用。
+        let variants = searchKeywords(from: keyword)
+        var lastSearchError: Error = Pan115Error.fileNotFound
+        for kw in variants {
+            do {
+                let files = try await searchFiles(keyword: kw, cookie: cookie)
+                if let hit = pickVideo(from: files, keyword: keyword, requireMatch: true) {
+                    return hit
+                }
+            } catch {
+                lastSearchError = error
+            }
+        }
+
+        // 2) 离线目录内全量列举（limit 拉满），在当前目录层面再匹配一次。
+        //    不再递归遍历子目录——深嵌套目录（如 263 条 ED2K 大目录）递归会发
+        //    起数千次请求，是「一直搜索」的直接元凶。
+        if let cid = folderCID, !cid.isEmpty {
+            let files = (try? await listFiles(cid: cid, cookie: cookie, limit: 500)) ?? []
+            if let hit = pickVideo(from: files, keyword: keyword, requireMatch: requireMatch) {
+                return hit
+            }
+        }
+
+        // 3) 兜底：离线目录浅层递归（深度 2，带超时），仅覆盖「番号压在下一层子目录」的常见场景。
+        if let cid = folderCID, !cid.isEmpty {
+            if let hit = try? await findLatestVideo(in: cid, cookie: cookie, keyword: keyword, requireMatch: requireMatch) {
+                return hit
+            }
+        }
+
+        // 兜底：优先抛出番号搜索途中遇到的具体错误（如 SSL EOF / cookie 失效），
+        // 避免上层把「网络错误」误判成「一直搜索」而卡住不提示。
+        throw lastSearchError
+    }
+
+    /// 在目录中递归找与番号匹配的视频（遍历所有子目录，不限层数）。
+    public func findLatestVideo(
+        in cid: String,
+        cookie: String,
+        keyword: String? = nil,
+        requireMatch: Bool = false
+    ) async throws -> FileItem {
+        var visited = Set<String>()
+        func walk(_ dirID: String, depth: Int) async throws -> FileItem? {
+            guard depth < 2, !visited.contains(dirID) else { return nil }
+            visited.insert(dirID)
+            let files = try await listFiles(cid: dirID, cookie: cookie, limit: 500)
+            let videos = files.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
+            if let hit = pickVideo(from: videos, keyword: keyword, requireMatch: requireMatch) {
+                return hit
+            }
+            let dirs = files.filter(\.isDir)
+            let needle = normalizedKey(keyword)
+            let preferred = dirs.filter { dir in
+                needle.isEmpty || normalizedKey(dir.name).contains(needle) || needle.contains(normalizedKey(dir.name))
+            }
+            for dir in (preferred + dirs).uniquedFiles.prefix(40) {
+                let childID = dir.cid.isEmpty ? dir.fileID : dir.cid
+                if let hit = try await walk(childID, depth: depth + 1) {
+                    return hit
+                }
+            }
+            return nil
+        }
+        if let hit = try await walk(cid, depth: 0) { return hit }
+        throw Pan115Error.fileNotFound
+    }
+
+    /// 原画：优先 m3u8 master 最高码率，失败再走 video 直链
+    public func originalPlayURL(pickCode: String, cookie: String, filename: String = "") async throws -> URL {
+        let streams = try await streamsForVideo(pickCode: pickCode, cookie: cookie, filename: filename)
+        guard let best = streams.first, let url = URL(string: best.url) else {
+            throw Pan115Error.playURLNotFound
+        }
+        return url
+    }
+
+    public func streamsForVideo(pickCode: String, cookie: String, filename: String) async throws -> [PlayStream] {
+        let m3u8URL = URL(string: "https://115.com/api/video/m3u8/\(pickCode.formEncoded).m3u8")!
+        var req = URLRequest(url: m3u8URL)
+        req.httpMethod = "GET"
+        appendCommonHeaders(&req, cookie: cookie)
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        let (data, _) = try await session.data(for: req)
+        if let text = String(data: data, encoding: .utf8), text.contains("#EXTM3U") {
+            let parsed = parseMaster(text)
+            if !parsed.isEmpty { return parsed }
+            if !text.contains("#EXT-X-STREAM-INF") {
+                return [PlayStream(name: "原画", url: m3u8URL.absoluteString, bandwidth: 0)]
+            }
+        }
+        let candidates = [
+            "https://115vod.com/webapi/files/video?pickcode=\(pickCode.formEncoded)&local=1",
+            "https://webapi.115.com/files/video?pickcode=\(pickCode.formEncoded)&local=1",
         ]
-        var lastError: Error = Pan115Error.fileNotFound
-        for u in urls {
+        for u in candidates {
             guard let url = URL(string: u) else { continue }
+            var r = URLRequest(url: url)
+            r.httpMethod = "GET"
+            appendCommonHeaders(&r, cookie: cookie)
+            if let obj = try? await json(for: r) {
+                let data = obj["data"] as? [String: Any] ?? [:]
+                let direct = stringValue(obj["download_url"] ?? obj["video_url"] ?? obj["url"]
+                    ?? data["download_url"] ?? data["video_url"] ?? data["url"])
+                if direct.hasPrefix("http"), URL(string: direct) != nil {
+                    return [PlayStream(name: "原文件", url: direct, bandwidth: 0)]
+                }
+            }
+        }
+        throw Pan115Error.playURLNotFound
+    }
+
+    /// 推送磁力并等到可播，返回原画 URL
+    public func pushAndPlay(magnet: String, cookie: String, folderCID: String, keyword: String) async throws -> URL {
+        _ = try await addOfflineTask(url: magnet, cookie: cookie, folderCID: folderCID)
+        let task = try await waitOfflineReady(keyword: keyword, cookie: cookie)
+        let cid = task.dirID.isEmpty ? folderCID : task.dirID
+        let file = try await findMatchedVideo(keyword: keyword, cookie: cookie, folderCID: cid, requireMatch: true)
+        return try await originalPlayURL(pickCode: file.pickCode, cookie: cookie, filename: file.name)
+    }
+
+    /// 推送磁力 → 等离线完成 → 删除离线目录内 <115MB 的小文件。
+    /// 返回 (离线任务, 删除的小文件数)。
+    public func pushAndCleanSmallFiles(
+        magnet: String,
+        cookie: String,
+        folderCID: String,
+        keyword: String,
+        thresholdBytes: Int64 = 115 * 1024 * 1024
+    ) async throws -> (OfflineTask, Int) {
+        _ = try await addOfflineTask(url: magnet, cookie: cookie, folderCID: folderCID)
+        let task = try await waitOfflineReady(keyword: keyword, cookie: cookie)
+        let cid = task.dirID.isEmpty ? folderCID : task.dirID
+        let deleted = try await deleteSmallFiles(in: cid, cookie: cookie, thresholdBytes: thresholdBytes)
+        return (task, deleted)
+    }
+
+    /// 等待离线任务完成（已推送过），然后进入离线产物（新建文件夹）删除 <115MB 的小文件。
+    ///
+    /// 关键事实（实测）：115 离线完成后，视频落在「离线目录 wp_path_id 下新建的文件夹」里，
+    /// 夹带一堆 <115MB 的垃圾文件（广告图 / txt / url / 封面图）。而 task_lists 只返回
+    /// 「进行中/失败」的任务，已完成任务会立刻消失，无法用 file_id 定位产物。
+    ///
+    /// 定位策略：
+    /// 1. 记录推送前的文件夹集合；
+    /// 2. 轮询离线目录，找「新出现的文件夹」（离线产物必然是推送后才创建的）；
+    /// 3. 找不到新文件夹时，退而用「名字含 keyword」的文件夹兜底；
+    /// 4. 再不行，删父目录内 <115MB 文件（覆盖单文件磁力直接落根的场景）。
+    ///
+    /// 返回删除数量。供「推送成功后后台清理」复用，不重复推送。
+    public func waitAndCleanSmallFiles(
+        keyword: String,
+        cookie: String,
+        folderCID: String,
+        existingFolderIDs: Set<String>? = nil,
+        timeout: TimeInterval = 90,
+        thresholdBytes: Int64 = 115 * 1024 * 1024
+    ) async throws -> Int {
+        let start = Date()
+        var knownFolders = existingFolderIDs ?? []
+
+        // 兼容旧调用；新推送入口应在 addOfflineTask 前传入目录快照，避免新目录被误记为旧目录。
+        if existingFolderIDs == nil,
+           let initial = try? await listFiles(cid: folderCID, cookie: cookie, limit: 500) {
+            knownFolders = Set(initial.filter { $0.isDir }.map { $0.fileID.isEmpty ? $0.cid : $0.fileID }.filter { !$0.isEmpty })
+        }
+
+        while Date().timeIntervalSince(start) < timeout {
+            // folderCID 仅作为父目录，绝不删除其直属文件。
+            let files = try await listFiles(cid: folderCID, cookie: cookie, limit: 500)
+            let dirs = files.filter { $0.isDir }
+
+            // 只进入推送前快照中不存在的新建文件夹；进入后才按大小递归清理。
+            for dir in dirs {
+                let key = dir.fileID.isEmpty ? dir.cid : dir.fileID
+                guard !key.isEmpty, !knownFolders.contains(key) else { continue }
+                let deleted = try await deleteJunkFiles(
+                    in: key,
+                    cookie: cookie,
+                    maxDepth: 2,
+                    thresholdBytes: thresholdBytes
+                )
+                if deleted > 0 { return deleted }
+                // 新目录可能还在写入，空扫描不能视为已完成；下一轮继续检查。
+                knownFolders.remove(key)
+            }
+
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+
+        throw Pan115Error.cleanupFolderNotFound
+    }
+
+    // MARK: - 删除文件（推送后清理垃圾文件）
+
+    private func isJunkFile(_ file: FileItem, thresholdBytes: Int64) -> Bool {
+        // 115 的 s/fs 字段就是文件大小；按大小清理，不依赖扩展名或视频类型。
+        !file.isDir && !file.fileID.isEmpty && file.size < thresholdBytes
+    }
+
+    private func deleteJunkFiles(
+        in cid: String,
+        cookie: String,
+        maxDepth: Int,
+        thresholdBytes: Int64
+    ) async throws -> Int {
+        let files = try await listFiles(cid: cid, cookie: cookie, limit: 1150)
+        var deleted = 0
+        let junk = files.filter { isJunkFile($0, thresholdBytes: thresholdBytes) }
+        if !junk.isEmpty {
+            deleted += try await deleteFiles(cid: cid, fileIDs: junk.map(\.fileID), cookie: cookie)
+        }
+        guard maxDepth > 0 else { return deleted }
+        for dir in files where dir.isDir {
+            let child = dir.cid.isEmpty ? dir.fileID : dir.cid
+            if !child.isEmpty {
+                deleted += try await deleteJunkFiles(
+                    in: child,
+                    cookie: cookie,
+                    maxDepth: maxDepth - 1,
+                    thresholdBytes: thresholdBytes
+                )
+            }
+        }
+        return deleted
+    }
+
+    /// 删除目录内指定文件（对齐参考脚本 POST webapi.115.com/rb/delete，form pid + fid[N]）。
+    /// 返回实际删除数量。
+    /// 注意：只有 webapi.115.com/rb/delete 能成功删除，但该域名在 iOS 上 SSL EOF 偶发，
+    /// 用独立 session + 多次退避重试。
+    @discardableResult
+    public func deleteFiles(cid: String, fileIDs: [String], cookie: String) async throws -> Int {
+        let ids = fileIDs.filter { !$0.isEmpty }
+        guard !ids.isEmpty else { return 0 }
+
+        var body = URLComponents()
+        var items = [URLQueryItem(name: "pid", value: cid), URLQueryItem(name: "ignore_warn", value: "1")]
+        for (i, fid) in ids.enumerated() {
+            items.append(URLQueryItem(name: "fid[\(i)]", value: fid))
+        }
+        body.queryItems = items
+
+        let url = URL(string: "https://webapi.115.com/rb/delete")!
+        var lastError: Error = Pan115Error.playURLNotFound
+        // 多次退避重试：SSL EOF 是偶发的，多试几次大概率成功
+        for attempt in 0..<6 {
             var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.httpBody = body.percentEncodedQuery?.data(using: .utf8)
+            req.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
             appendCommonHeaders(&req, cookie: cookie)
             do {
-                let obj = try await json(for: req)
-                let files = extractFileList(obj)
-                if !files.isEmpty { return files }
-                if boolState(obj["state"]) { return [] }
+                let (data, response) = try await deleteSession.data(for: req)
+                if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                    throw Pan115Error.http(http.statusCode)
+                }
+                guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+                    throw Pan115Error.playURLNotFound
+                }
+                if text.lowercased().contains("<html") || text.contains("登录") {
+                    throw Pan115Error.cookieInvalid
+                }
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if boolState(obj["state"]) || (obj["state"] as? Int) == 1 {
+                        return ids.count
+                    }
+                }
             } catch {
                 lastError = error
+                // 退避：0.5s, 1s, 1.5s, 2s, 2.5s
+                if attempt < 5 {
+                    try? await Task.sleep(nanoseconds: UInt64(500_000_000 * (attempt + 1)))
+                }
             }
         }
         throw lastError
     }
 
-    /// 优先转码 m3u8；没有子流时用 webapi download 换原文件直链。
-    public func streamsForVideo(pickCode: String, cookie: String, filename: String) async throws -> [PlayStream] {
-        let m3u8URL = URL(string: "https://115.com/api/video/m3u8/\(pickCode.formEncoded).m3u8")!
-        var req = URLRequest(url: m3u8URL)
-        appendCommonHeaders(&req, cookie: cookie)
-        req.setValue("*/*", forHTTPHeaderField: "Accept")
-        if let (data, _) = try? await session.data(for: req),
-           let text = String(data: data, encoding: .utf8),
-           text.contains("#EXTM3U") {
-            let parsed = parseMaster(text)
-            if !parsed.isEmpty { return parsed }
-            if text.contains("#EXTINF") {
-                return [PlayStream(name: "原画", url: m3u8URL.absoluteString, bandwidth: 0)]
+    /// 删除目录内所有小于给定字节数的文件（用于清理离线完成后夹带的小文件）。
+    /// 只删非目录、有 fid 的文件；返回删除数量。
+    @discardableResult
+    public func deleteSmallFiles(in cid: String, cookie: String, thresholdBytes: Int64 = 115 * 1024 * 1024) async throws -> Int {
+        var deleted = 0
+        var lastRemaining = 0
+        for attempt in 0..<3 {
+            let files = try await listFiles(cid: cid, cookie: cookie, limit: 500)
+            let small = files.filter { !$0.isDir && $0.size < thresholdBytes && !$0.fileID.isEmpty }
+            guard !small.isEmpty else { return deleted }
+            deleted += try await deleteFiles(cid: cid, fileIDs: small.map(\.fileID), cookie: cookie)
+
+            // 115 返回成功后仍可能有短暂延迟，必须复查实际目录。
+            let remainingFiles = try await listFiles(cid: cid, cookie: cookie, limit: 500)
+            let remaining = remainingFiles.filter { !$0.isDir && $0.size > 0 && $0.size < thresholdBytes && !$0.fileID.isEmpty }
+            lastRemaining = remaining.count
+            if remaining.isEmpty { return deleted }
+            if attempt < 2 {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
-        if let direct = try? await downloadURL(pickCode: pickCode, cookie: cookie) {
-            return [PlayStream(name: "原文件", url: direct.absoluteString, bandwidth: 0)]
-        }
-        throw Pan115Error.playURLNotFound
+        throw Pan115Error.cleanupFailed(lastRemaining)
     }
 
-    /// webapi download 会 302 到 CDN。用播放器同一 UA 跟随，拿到不带 Cookie 也能播的直链。
-    private func downloadURL(pickCode: String, cookie: String) async throws -> URL {
-        let url = URL(string: "https://webapi.115.com/files/download?pickcode=\(pickCode.formEncoded)")!
-        var req = URLRequest(url: url)
-        appendCommonHeaders(&req, cookie: cookie)
-        let (data, response) = try await session.data(for: req)
-        if let http = response as? HTTPURLResponse,
-           let location = http.value(forHTTPHeaderField: "Location"),
-           let direct = URL(string: location), direct.scheme?.hasPrefix("http") == true {
-            return direct
-        }
-        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        let fileURL = stringValue(obj["file_url"] ?? (obj["data"] as? [String: Any])?["file_url"])
-        guard fileURL.hasPrefix("http"), let direct = URL(string: fileURL) else {
-            throw Pan115Error.playURLNotFound
-        }
-        return direct
+    private func episodeNumber(_ name: String) -> Int {
+        let pattern = #"(?:-|_| )([0-9]+)(?:\.[^.]+)?$"#
+        guard let r = try? NSRegularExpression(pattern: pattern),
+              let m = r.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+              let range = Range(m.range(at: 1), in: name),
+              let value = Int(name[range]) else { return 1 }
+        return value
     }
 
-    private func fetchSign(cookie: String) async throws -> (sign: String, time: String) {
-        var req = URLRequest(url: URL(string: "https://115.com/?ct=offline&ac=space")!)
-        appendCommonHeaders(&req, cookie: cookie)
-        let (data, _) = try await session.data(for: req)
-        struct SignResp: Decodable {
-            let sign: String?
-            let time: FlexibleValue?
+    private func pickVideo(from files: [FileItem], keyword: String?, requireMatch: Bool) -> FileItem? {
+        var videos = files.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
+        if videos.isEmpty {
+            videos = files.filter { !$0.isDir && !$0.pickCode.isEmpty && $0.size > 10_000_000 }
         }
-        let decoded = try JSONDecoder().decode(SignResp.self, from: data)
-        guard let sign = decoded.sign, !sign.isEmpty else { throw Pan115Error.signFailed }
-        return (sign, decoded.time?.stringValue ?? "\(Int(Date().timeIntervalSince1970 * 1000))")
+        let scored: [FileItem]
+        if let keyword, !keyword.isEmpty {
+            let hits = videos.filter { file in
+                nameMatches(file.name, keyword: keyword)
+            }
+            scored = hits.isEmpty && !requireMatch ? videos : hits
+        } else {
+            if requireMatch { return nil }
+            scored = videos
+        }
+        return scored.max(by: { score($0) < score($1) })
     }
 
-    private func json(for req: URLRequest) async throws -> [String: Any] {
-        let (data, response) = try await session.data(for: req)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            throw Pan115Error.http(http.statusCode)
+    /// 排除 trailer/sample/preview，大文件优先（对齐 Forward 模块 scoreWesternFile）
+    private func score(_ file: FileItem) -> Int {
+        var s = 0
+        let n = file.name.lowercased()
+        for bad in ["trailer", "sample", "preview", "behind", "bts"] {
+            if n.contains(bad) { s -= 50 }
         }
-        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw Pan115Error.api("接口返回不是 JSON")
-        }
-        return obj
+        if file.size >= 2_000_000_000 { s += 30 }
+        else if file.size >= 1_000_000_000 { s += 20 }
+        else if file.size >= 500_000_000 { s += 10 }
+        else if file.size > 0 && file.size < 100_000_000 { s -= 20 }
+        if n.count > 30 { s += 5 }
+        s += Int(min(file.size / 50_000_000, 40))
+        return s
     }
 
-    private func parseResult(_ data: Data) -> Pan115PushResult {
-        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
-            return .failed("接口无返回")
-        }
-        if text.lowercased().contains("<html") || text.contains("登录") {
-            return .failed("Cookie 无效或已过期")
-        }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .failed("接口返回不是 JSON")
-        }
-        let state = obj["state"]
-        let ok = (state as? Bool) == true || (state as? Int) == 1 || (state as? String) == "1" || (state as? String) == "true"
-        if ok { return .success }
-        let msg = (obj["error_msg"] as? String) ?? (obj["error"] as? String) ?? (obj["msg"] as? String) ?? ""
-        let errcode = intValue(obj["errcode"] ?? obj["errno"])
-        if errcode == 10008 || msg.contains("已存在") || msg.contains("重复") { return .exists }
-        return .failed(msg.isEmpty ? "添加失败" : msg)
-    }
-
-    static func playHeaders(cookie: String) -> [String: String] {
-        [
-            "User-Agent": safariUA,
-            "Accept": "*/*",
-            "Origin": "https://115.com",
-            "Referer": "https://115.com/",
-            "Cookie": Pan115Settings.normalizeCookie(cookie),
-        ]
-    }
-
-    private func appendCommonHeaders(_ req: inout URLRequest, cookie: String) {
-        let h = Self.playHeaders(cookie: cookie)
-        for (key, value) in h {
-            req.setValue(value, forHTTPHeaderField: key)
-        }
-        req.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
-    }
-
+    /// 多个搜索关键词变体：115 搜索对「-」敏感，务必保留连字符。
     private func searchKeywords(from raw: String) -> [String] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
+        let upper = trimmed.uppercased()
+
+        // FC2 特判
+        if let r = try? NSRegularExpression(pattern: #"FC2(?:[- ]?PPV)?[- ]?(\d{5,8})"#, options: .caseInsensitive),
+           let m = r.firstMatch(in: upper, range: NSRange(upper.startIndex..., in: upper)),
+           let range = Range(m.range(at: 1), in: upper) {
+            let digits = String(upper[range])
+            return ["FC2-\(digits)", "FC2\(digits)"]
+        }
+
+        // 保留连字符，只做大小写两种变体（去连字符会搜索失败）
         var variants: [String] = []
-        let code = trimmed.range(of: #"[A-Za-z]{2,12}-?\d{2,6}"#, options: .regularExpression).map { String(trimmed[$0]) }
-        if let code { variants.append(code) }
-        let words = trimmed.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 4 }
-        if let studio = words.first(where: { $0.first?.isLetter == true && $0.count >= 4 }) {
-            let nums = words.filter { $0.allSatisfy(\.isNumber) && $0.count >= 2 }
+        let parts = trimmed.split { $0 == "." || $0 == " " }.map(String.init)
+        if parts.count >= 2, let studio = parts.first,
+           studio.range(of: #"^[A-Za-z]{3,}$"#, options: .regularExpression) != nil {
+            let nums = parts.filter { $0.allSatisfy(\.isNumber) && ($0.count == 2 || $0.count == 4) }
             if nums.count >= 3 {
-                variants.append("\(studio) \(nums.prefix(3).joined(separator: " "))")
+                variants.append("\(studio).\(nums[0]).\(nums[1]).\(nums[2])")
             }
             variants.append(studio)
         }
-        if let first = words.first, !variants.contains(first) { variants.append(first) }
-        return Array(NSOrderedSet(array: variants)) as? [String] ?? variants
+        variants.append(trimmed)
+        if upper != trimmed {
+            variants.append(upper)
+        }
+        let spaced = trimmed.replacingOccurrences(of: ".", with: " ")
+        if spaced != trimmed { variants.append(spaced) }
+        return variants.uniqued
     }
 
+    /// 欧美文件名常被截短，不能要求整串番号都出现在文件名里。
     private func nameMatches(_ filename: String, keyword: String) -> Bool {
-        let name = normalized(filename)
-        let key = normalized(keyword)
-        if !key.isEmpty, name.contains(key) { return true }
-        let words = keyword.split { !$0.isLetter && !$0.isNumber }.map { normalized(String($0)) }.filter { $0.count >= 4 }
-        guard let studio = words.first else { return false }
-        return name.contains(studio)
+        let name = normalizedKey(filename)
+        let key = normalizedKey(keyword)
+        if key.isEmpty || name.isEmpty { return false }
+        if name.contains(key) { return true }
+        guard keyword.contains(".") || keyword.contains(" ") else { return false }
+        let tokens = matchTokens(keyword)
+        let studio = tokens.first { ($0.first?.isLetter == true) && $0.count >= 3 }
+        let date = westernDateToken(tokens)
+        if let studio, name.contains(studio) {
+            if let date, name.contains(date) { return true }
+            let rest = tokens.filter { $0 != studio && $0.count >= 4 }
+            return rest.filter { name.contains($0) }.count >= 2
+        }
+        return false
     }
 
-    private func normalized(_ raw: String) -> String {
-        raw.lowercased().filter { $0.isLetter || $0.isNumber }
+    private func matchTokens(_ raw: String) -> [String] {
+        raw.lowercased()
+            .replacingOccurrences(of: #"\.(mp4|mkv|avi|mov|wmv|flv|ts|m2ts|webm|m4v)$"#, with: "", options: .regularExpression)
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { $0.count >= 2 }
+    }
+
+    private func westernDateToken(_ tokens: [String]) -> String? {
+        var nums: [String] = []
+        for t in tokens where t.allSatisfy(\.isNumber) && (t.count == 2 || t.count == 4) {
+            nums.append(t.count == 4 ? String(t.suffix(2)) : t)
+            if nums.count >= 3 { return nums[0] + nums[1] + nums[2] }
+        }
+        return tokens.first { $0.count == 6 && $0.allSatisfy(\.isNumber) }
+    }
+
+    private func normalizedKey(_ raw: String?) -> String {
+        guard let raw else { return "" }
+        return raw.lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: ".", with: "")
+            // 115 常将 FC2-PPV 写成 FC2PPV，视为同一番号。
+            .replacingOccurrences(of: "fc2ppv", with: "fc2")
     }
 
     private func extractFileList(_ obj: [String: Any]) -> [FileItem] {
         var raw: [[String: Any]] = []
+        // 兼容 search 接口双层 data 嵌套（data.data / data.list / data.files 等）
         func collect(_ value: Any?) {
             guard let value else { return }
             if let arr = value as? [[String: Any]] { raw = arr; return }
             if let dict = value as? [String: Any] {
-                for key in ["data", "list", "files", "items"] {
+                for key in ["data", "list", "files", "items", "videos"] {
                     if let arr = dict[key] as? [[String: Any]] { raw = arr; return }
+                }
+                // 兜底：dict 里第一个数组
+                if raw.isEmpty {
+                    for (_, v) in dict {
+                        if let arr = v as? [[String: Any]] { raw = arr; break }
+                    }
+                    if raw.isEmpty { raw = [dict] }
                 }
             }
         }
         collect(obj["data"])
+        if raw.isEmpty { collect(obj["list"]) }
+        if raw.isEmpty { collect(obj["files"]) }
         if raw.isEmpty { collect(obj) }
-        return raw.compactMap { item in
-            let name = (item["n"] as? String) ?? (item["fn"] as? String) ?? (item["name"] as? String) ?? (item["file_name"] as? String) ?? ""
-            guard !name.isEmpty else { return nil }
-            let pc = (item["pc"] as? String) ?? (item["pick_code"] as? String) ?? (item["pickcode"] as? String) ?? ""
+        return raw.map { item in
+            let name = (item["n"] as? String) ?? (item["fn"] as? String) ?? (item["name"] as? String) ?? (item["file_name"] as? String) ?? (item["filename"] as? String) ?? ""
+            let pc = (item["pc"] as? String) ?? (item["pick_code"] as? String) ?? (item["pickcode"] as? String) ?? (item["pickCode"] as? String) ?? ""
             let fid = stringValue(item["fid"] ?? item["file_id"] ?? item["id"])
             let cid = stringValue(item["cid"] ?? item["pid"])
-            let isDir = pc.isEmpty && item["sha"] == nil && item["sha1"] == nil
-            return FileItem(
-                name: name, pickCode: pc, fileID: fid,
-                cid: cid.isEmpty ? fid : cid, isDir: isDir,
-                size: Int64(doubleValue(item["s"] ?? item["fs"] ?? item["size"]))
-            )
+            let isDir = (item["pc"] == nil && item["pick_code"] == nil && item["pickcode"] == nil && item["sha"] == nil && item["sha1"] == nil && !cid.isEmpty && pc.isEmpty)
+                || intValue(item["fc"]) == 0
+            return FileItem(name: name, pickCode: pc, fileID: fid, cid: cid.isEmpty ? fid : cid, isDir: isDir, size: Int64(doubleValue(item["s"] ?? item["fs"] ?? item["size"])))
         }
     }
 
@@ -424,16 +828,20 @@ public final class Pan115Client: @unchecked Sendable {
         var i = 0
         while i < lines.count {
             let line = lines[i]
-            if line.contains("#EXT-X-STREAM-INF"), i + 1 < lines.count {
+            if line.contains("#EXT-X-STREAM-INF") {
+                let name = capture(line, #"NAME="([^"]+)""#)
                 let height = Int(capture(line, #"RESOLUTION=\d+x(\d+)"#) ?? "") ?? 0
                 let bw = Int(capture(line, #"BANDWIDTH=(\d+)"#) ?? "") ?? 0
-                var u = lines[i + 1]
-                if !u.hasPrefix("http"), let abs = URL(string: u, relativeTo: URL(string: "https://115.com/")) {
-                    u = abs.absoluteString
-                }
-                if u.hasPrefix("http") {
-                    let label = height > 0 ? "\(height)p" : "原画"
-                    streams.append(PlayStream(name: label, url: u, bandwidth: bw + height * 1_000_000))
+                let label = qualityLabel(name: name, height: height, bandwidth: bw)
+                if i + 1 < lines.count {
+                    var u = lines[i + 1]
+                    if u.hasPrefix("https: //") { u = u.replacingOccurrences(of: "https: //", with: "https://") }
+                    if !u.hasPrefix("http"), let abs = URL(string: u, relativeTo: URL(string: "https://115.com/")) {
+                        u = abs.absoluteString
+                    }
+                    if u.hasPrefix("http") {
+                        streams.append(PlayStream(name: label, url: u, bandwidth: bw + qualityPriority(name: name, height: height) * 10_000_000))
+                    }
                 }
             }
             i += 1
@@ -449,29 +857,158 @@ public final class Pan115Client: @unchecked Sendable {
         return String(line[range])
     }
 
-    private func boolState(_ value: Any?) -> Bool {
-        (value as? Bool) == true || (value as? Int) == 1 || (value as? String) == "1" || (value as? String) == "true"
+    private func qualityLabel(name: String?, height: Int, bandwidth: Int) -> String {
+        let n = (name ?? "").uppercased()
+        switch n {
+        case "BD": return "4K"
+        case "UD": return "1080P"
+        case "HD": return "720P"
+        case "SD": return "480P"
+        case "LD": return "360P"
+        default: break
+        }
+        if height >= 2160 { return "4K" }
+        if height >= 1080 { return "1080P" }
+        if height >= 720 { return "720P" }
+        if height >= 480 { return "480P" }
+        if height >= 360 { return "360P" }
+        if bandwidth > 0 { return "\(bandwidth / 1000)k" }
+        return "原画"
     }
 
-    private func intValue(_ value: Any?) -> Int {
-        if let i = value as? Int { return i }
-        if let s = value as? String, let i = Int(s) { return i }
-        if let d = value as? Double { return Int(d) }
+    private func qualityPriority(name: String?, height: Int) -> Int {
+        let n = (name ?? "").uppercased()
+        switch n {
+        case "BD": return 4
+        case "UD": return 3
+        case "HD": return 2
+        case "SD": return 1
+        case "LD": return 0
+        default: break
+        }
+        if height >= 2160 { return 4 }
+        if height >= 1080 { return 3 }
+        if height >= 720 { return 2 }
+        if height >= 480 { return 1 }
         return 0
     }
 
-    private func doubleValue(_ value: Any?) -> Double {
-        if let d = value as? Double { return d }
-        if let i = value as? Int { return Double(i) }
-        if let s = value as? String, let d = Double(s) { return d }
-        return 0
+    private func json(for req: URLRequest, retries: Int = 2) async throws -> [String: Any] {
+        var lastErr: Error = Pan115Error.playURLNotFound
+        for attempt in 0...retries {
+            do {
+                let (data, response) = try await session.data(for: req)
+                if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                    throw Pan115Error.http(http.statusCode)
+                }
+                guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+                    throw Pan115Error.playURLNotFound
+                }
+                if text.lowercased().contains("<html") || text.contains("登录") {
+                    throw Pan115Error.cookieInvalid
+                }
+                guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw Pan115Error.playURLNotFound
+                }
+                return obj
+            } catch {
+                lastErr = error
+                if attempt < retries {
+                    try? await Task.sleep(nanoseconds: 400_000_000 * UInt64(attempt + 1))
+                }
+            }
+        }
+        throw lastErr
     }
 
-    private func stringValue(_ value: Any?) -> String {
-        if let s = value as? String { return s }
-        if let i = value as? Int { return "\(i)" }
-        if let d = value as? Double { return String(Int(d)) }
+    private func boolState(_ v: Any?) -> Bool {
+        if let b = v as? Bool { return b }
+        if let i = v as? Int { return i == 1 }
+        if let s = v as? String { return s == "1" || s.lowercased() == "true" }
+        return false
+    }
+    private func intValue(_ v: Any?) -> Int {
+        if let i = v as? Int { return i }
+        if let d = v as? Double { return Int(d) }
+        if let s = v as? String { return Int(s) ?? 0 }
+        return 0
+    }
+    private func doubleValue(_ v: Any?) -> Double {
+        if let d = v as? Double { return d }
+        if let i = v as? Int { return Double(i) }
+        if let s = v as? String { return Double(s) ?? 0 }
+        return 0
+    }
+    private func stringValue(_ v: Any?) -> String {
+        if let s = v as? String { return s }
+        if let i = v as? Int { return String(i) }
+        if let d = v as? Double { return String(Int(d)) }
         return ""
+    }
+
+    private func fetchSign(cookie: String) async throws -> (sign: String, time: String) {
+        let ts = Int(Date().timeIntervalSince1970 * 1000)
+        let url = URL(string: "https://115.com/?ct=offline&ac=space&_=\(ts)")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        appendCommonHeaders(&req, cookie: cookie)
+        let (data, _) = try await session.data(for: req)
+        guard let text = String(data: data, encoding: .utf8), !text.lowercased().contains("<html") else {
+            throw Pan115Error.cookieInvalid
+        }
+        struct SignResp: Decodable {
+            let sign: String?
+            let time: FlexibleIntOrString?
+        }
+        let decoded = try JSONDecoder().decode(SignResp.self, from: data)
+        guard let sign = decoded.sign, !sign.isEmpty else {
+            throw Pan115Error.signFailed
+        }
+        return (sign, decoded.time?.stringValue ?? "\(ts)")
+    }
+
+    private func parseResult(_ data: Data) -> Pan115PushResult {
+        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+            return .failed("接口无返回")
+        }
+        if text.lowercased().contains("<html") || text.contains("登录") {
+            return .failed("Cookie 无效或已过期")
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failed("接口返回不是 JSON")
+        }
+        let state = obj["state"]
+        let ok = (state as? Bool) == true || (state as? Int) == 1 || (state as? String) == "1"
+        if ok { return .success }
+        let msg = (obj["error_msg"] as? String)
+            ?? (obj["error"] as? String)
+            ?? (obj["msg"] as? String)
+            ?? ""
+        let errcode = (obj["errcode"] as? Int) ?? (obj["errno"] as? Int) ?? 0
+        if errcode == 10008 || msg.contains("已存在") || msg.contains("重复") {
+            return .exists
+        }
+        return .failed(msg.isEmpty ? "添加失败" : msg)
+    }
+
+    static func playHeaders(cookie: String) -> [String: String] {
+        [
+            "User-Agent": safariUA,
+            "Accept": "*/*",
+            "Origin": "https://115.com",
+            "Referer": "https://115.com/",
+            "Cookie": Pan115Settings.normalizeCookie(cookie),
+        ]
+    }
+
+    private func appendCommonHeaders(_ req: inout URLRequest, cookie: String) {
+        let h = Self.playHeaders(cookie: cookie)
+        req.setValue(h["User-Agent"], forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json, text/javascript, */*; q=0.01", forHTTPHeaderField: "Accept")
+        req.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        req.setValue(h["Origin"], forHTTPHeaderField: "Origin")
+        req.setValue(h["Referer"], forHTTPHeaderField: "Referer")
+        req.setValue(h["Cookie"], forHTTPHeaderField: "Cookie")
     }
 }
 
@@ -486,6 +1023,8 @@ public enum Pan115Error: Error, LocalizedError {
     case fileNotFound
     case playURLNotFound
     case api(String)
+    case cleanupFailed(Int)
+    case cleanupFolderNotFound
 
     public var errorDescription: String? {
         switch self {
@@ -494,22 +1033,30 @@ public enum Pan115Error: Error, LocalizedError {
         case .missingFolder: return "请先填写 115 离线目录 CID"
         case .signFailed: return "获取 115 签名失败"
         case .http(let code): return "115 接口 HTTP \(code)"
-        case .timeout: return "等待 115 离线完成超时，可稍后在详情页再点播放"
+        case .timeout: return "等待 115 离线完成超时"
         case .taskFailed(let msg): return "115 离线失败：\(msg)"
-        case .fileNotFound: return "115 里还没找到这部视频"
-        case .playURLNotFound: return "无法获取 115 播放地址"
+        case .fileNotFound: return "离线目录里没找到与当前番号匹配的视频"
+        case .playURLNotFound: return "无法获取 115 原画播放地址"
         case .api(let msg): return msg
-        }
+        case .cleanupFailed(let count): return "115 垃圾文件仍剩余 \(count) 个"
+        case .cleanupFolderNotFound: return "115 离线后未找到新建文件夹，未删除父目录文件"        }
     }
 }
 
-private struct FlexibleValue: Decodable {
-    let stringValue: String
+private enum FlexibleIntOrString: Decodable {
+    case int(Int)
+    case string(String)
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if let i = try? c.decode(Int.self) { stringValue = "\(i)"; return }
-        if let s = try? c.decode(String.self) { stringValue = s; return }
-        stringValue = ""
+        if let i = try? c.decode(Int.self) { self = .int(i); return }
+        if let s = try? c.decode(String.self) { self = .string(s); return }
+        self = .string("")
+    }
+    var stringValue: String {
+        switch self {
+        case .int(let i): return "\(i)"
+        case .string(let s): return s
+        }
     }
 }
 
@@ -518,5 +1065,22 @@ private extension String {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         return addingPercentEncoding(withAllowedCharacters: allowed) ?? self
+    }
+}
+
+private extension Array where Element == Pan115Client.FileItem {
+    var uniquedFiles: [Pan115Client.FileItem] {
+        var seen = Set<String>()
+        return filter { item in
+            let key = item.fileID.isEmpty ? item.cid : item.fileID
+            return seen.insert(key).inserted
+        }
+    }
+}
+
+private extension Array where Element == String {
+    var uniqued: [String] {
+        var seen = Set<String>()
+        return filter { seen.insert($0).inserted }
     }
 }

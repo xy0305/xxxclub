@@ -224,8 +224,13 @@ struct PressableGlassStyle: ButtonStyle {
 }
 
 extension View {
-    func pressableGlass() -> some View {
+    func pressableGlass(scale: CGFloat = 0.96) -> some View {
         buttonStyle(PressableGlassStyle())
+    }
+
+    func liquidGlassList() -> some View {
+        scrollContentBackground(.hidden)
+            .background { LiquidGlassBackground() }
     }
 }
 
@@ -270,16 +275,7 @@ struct PosterImage: View {
     var body: some View {
         Color(.systemGray6)
             .overlay {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure:
-                        placeholder
-                    default:
-                        ProgressView()
-                    }
-                }
+                SiteImage(url: url)
             }
             .clipped()
     }
