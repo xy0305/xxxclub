@@ -191,8 +191,9 @@ enum XCParser {
     static func parseDetail(_ html: String, id: String) -> XCDetail? {
         let title = HTML.strip(HTML.first(html, pattern: "<h1>([\\s\\S]*?)</h1>") ?? "")
         guard !title.isEmpty else { return nil }
-        let cover = HTML.abs(HTML.first(html, pattern: "class=['\\\"]detailsposter['\\\"][^>]*src=['\\\"]([^'\\\"]+)['\\\"]")
-            ?? HTML.first(html, pattern: "src=['\\\"](https://imgxclub.com/p/[^'\\\"]+)['\\\"]"))
+        let cover = HTML.abs(HTML.first(html, pattern: "<img[^>]*class=['\\\"]detailsposter['\\\"][^>]*>")
+            .flatMap { HTML.attr($0, "src") }
+            ?? HTML.first(html, pattern: "src=['\\\"](https://imgxclub.com/(?:ps|p)/(?!xclogo)[^'\\\"]+)['\\\"]"))
         let catName = HTML.strip(HTML.first(html, pattern: "Category</span>[\\s\\S]*?<a[^>]*>([\\s\\S]*?)</a>") ?? "")
         let catID = HTML.first(html, pattern: "href=['\\\"]/torrents/browse/(\\d+)/?['\\\"]") ?? ""
         let size = field(html, "Size")

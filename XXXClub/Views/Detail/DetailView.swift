@@ -50,7 +50,7 @@ struct DetailView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 14) {
-            PosterImage(url: torrent?.coverURL)
+            PosterImage(url: detail?.torrent.coverURL ?? preview?.coverURL)
                 .frame(width: 132, height: 198)
                 .glassMediaFrame(cornerRadius: 14)
             VStack(alignment: .leading, spacing: 8) {
