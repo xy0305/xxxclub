@@ -167,7 +167,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = XXXClub/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = XXXClub;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
@@ -199,7 +199,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = XXXClub/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = XXXClub;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
