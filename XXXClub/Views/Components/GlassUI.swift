@@ -15,6 +15,14 @@ enum AdaptiveLayout {
     static var horizontalPadding: CGFloat { isPad ? 24 : 16 }
     static var gridPadding: CGFloat { isPad ? 20 : 12 }
     static var posterMin: CGFloat { isPad ? 150 : 108 }
+
+    /// 固定列数。自适应 minimum 在窄屏会把卡片算成整行宽，封面就会叠到下一张上。
+    static var posterColumns: Int {
+        let width = UIScreen.main.bounds.width
+        if width >= 1000 { return 5 }
+        if width >= 700 { return 4 }
+        return 3
+    }
 }
 
 enum XCPalette {
@@ -260,19 +268,20 @@ struct PosterImage: View {
     let url: URL?
 
     var body: some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().scaledToFill()
-            case .failure:
-                placeholder
-            default:
-                ZStack {
-                    Color(.systemGray6)
-                    ProgressView()
+        Color(.systemGray6)
+            .overlay {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    case .failure:
+                        placeholder
+                    default:
+                        ProgressView()
+                    }
                 }
             }
-        }
+            .clipped()
     }
 
     private var placeholder: some View {
@@ -290,32 +299,39 @@ struct PosterCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .topLeading) {
-                PosterImage(url: torrent.coverURL)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(2 / 3, contentMode: .fit)
-                    .glassMediaFrame(cornerRadius: 12)
-                if let rank = torrent.rank {
-                    GlassChip(text: "#\(rank)", tint: XCPalette.pink)
-                        .padding(6)
-                } else if !torrent.size.isEmpty {
-                    GlassChip(text: torrent.size, tint: .black.opacity(0.55))
-                        .padding(6)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            Color.clear
+                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                .overlay {
+                    PosterImage(url: torrent.coverURL)
                 }
-            }
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(alignment: .topLeading) {
+                    if let rank = torrent.rank {
+                        GlassChip(text: "#\(rank)", tint: XCPalette.pink)
+                            .padding(6)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if torrent.rank == nil, !torrent.size.isEmpty {
+                        GlassChip(text: torrent.size, tint: .black.opacity(0.55))
+                            .padding(6)
+                    }
+                }
+                .overlay {
+                    GlassRim(shape: RoundedRectangle(cornerRadius: 12, style: .continuous), lineWidth: 0.8)
+                }
             Text(torrent.title)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.primary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if torrent.seeders > 0 || !torrent.added.isEmpty {
-                Text(meta)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+                .frame(minHeight: 32, alignment: .topLeading)
+            Text(meta.isEmpty ? " " : meta)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
@@ -331,11 +347,14 @@ struct PosterGrid: View {
     let items: [XCTorrent]
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: AdaptiveLayout.posterMin), spacing: 12)]
+        Array(
+            repeating: GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 10, alignment: .top),
+            count: AdaptiveLayout.posterColumns
+        )
     }
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 16) {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
             ForEach(items) { item in
                 NavigationLink {
                     DetailView(id: item.id, preview: item)

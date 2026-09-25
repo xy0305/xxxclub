@@ -14,6 +14,8 @@ struct DetailView: View {
     @State private var error: String?
     @State private var copied = false
     @State private var showFiles = false
+    @State private var play115 = false
+    @State private var pushMessage: String?
     @StateObject private var library = LibraryStore.shared
     @Environment(\.openURL) private var openURL
 
@@ -41,6 +43,13 @@ struct DetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .nestedListChrome()
         .task { await load() }
+        .fullScreenCover(isPresented: $play115) {
+            Pan115PlayerView(
+                torrentID: id,
+                title: torrent?.title ?? "",
+                magnet: detail?.magnet ?? ""
+            )
+        }
     }
 
     private var header: some View {
@@ -90,34 +99,51 @@ struct DetailView: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 8) {
             Button {
-                copyMagnet()
+                play115 = true
             } label: {
-                Label(copied ? "已复制" : "复制磁力", systemImage: copied ? "checkmark" : "doc.on.doc")
+                Label(Pan115Settings.shared.isConfigured ? "115 播放" : "设置 115 后播放", systemImage: "play.fill")
                     .frame(maxWidth: .infinity)
             }
             .xcGlassButton(prominent: true)
-            .disabled(detail?.magnet.isEmpty != false)
+            .disabled(detail?.magnet.isEmpty != false && !Pan115PlaybackCache.hasMagnet(id))
 
-            Button {
-                openMagnet()
-            } label: {
-                Label("打开", systemImage: "arrow.up.forward.app")
-                    .frame(maxWidth: .infinity)
-            }
-            .xcGlassButton()
-            .disabled(detail?.magnet.isEmpty != false)
+            HStack(spacing: 10) {
+                Button {
+                    copyMagnet()
+                } label: {
+                    Label(copied ? "已复制" : "复制磁力", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .xcGlassButton()
+                .disabled(detail?.magnet.isEmpty != false)
 
-            Button {
-                if let torrent { library.toggle(torrent) }
-                GlassHaptic.tap()
-            } label: {
-                Image(systemName: library.contains(id) ? "heart.fill" : "heart")
-                    .frame(width: 28)
+                Button {
+                    openMagnet()
+                } label: {
+                    Label("打开", systemImage: "arrow.up.forward.app")
+                        .frame(maxWidth: .infinity)
+                }
+                .xcGlassButton()
+                .disabled(detail?.magnet.isEmpty != false)
+
+                Button {
+                    if let torrent { library.toggle(torrent) }
+                    GlassHaptic.tap()
+                } label: {
+                    Image(systemName: library.contains(id) ? "heart.fill" : "heart")
+                        .frame(width: 28)
+                }
+                .xcGlassButton()
+                .disabled(torrent == nil)
             }
-            .xcGlassButton()
-            .disabled(torrent == nil)
+            if let pushMessage {
+                Text(pushMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, AdaptiveLayout.horizontalPadding)
     }

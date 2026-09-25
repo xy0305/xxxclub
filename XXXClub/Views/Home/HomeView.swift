@@ -58,10 +58,11 @@ struct HomeView: View {
                 Spacer()
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .liquidGlassRect(cornerRadius: 14)
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .pressableGlass()
+        .buttonStyle(.plain)
+        .liquidGlassRect(cornerRadius: 14)
         .padding(.horizontal, AdaptiveLayout.horizontalPadding)
         .padding(.top, 8)
     }

@@ -13,6 +13,16 @@ struct MineView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("115") {
+                    NavigationLink {
+                        Pan115SettingsView()
+                    } label: {
+                        LabeledContent("离线播放") {
+                            Text(Pan115Settings.shared.isConfigured ? "已设置" : "未设置")
+                                .foregroundStyle(Pan115Settings.shared.isConfigured ? .green : .secondary)
+                        }
+                    }
+                }
                 Section("收藏") {
                     if library.saved.isEmpty {
                         Text("在详情页点收藏。磁力存在本机，不上传。")
@@ -35,7 +45,7 @@ struct MineView: View {
                 Section("关于") {
                     LabeledContent("站点", value: "xxxclub.to")
                     LabeledContent("备用", value: "xxxclub.me")
-                    Text("这是种子索引。复制磁力后用外部下载器，iOS 不能边下边播。")
+                    Text("这是种子索引。点播放会推到 115 离线，完成后在 App 里播。也可以复制磁力交给外部下载器。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
