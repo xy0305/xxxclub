@@ -41,7 +41,8 @@ struct SiteImage: View {
             image = cached
             return
         }
-        let decoded = await fetch(url, headers: false) ?? await fetch(url, headers: true)
+        var decoded = await fetch(url, headers: false)
+        if decoded == nil { decoded = await fetch(url, headers: true) }
         if let decoded {
             SiteImageCache.store(decoded, for: url)
             image = decoded
