@@ -93,6 +93,32 @@ struct DetailView: View {
             if !t.uploader.isEmpty {
                 Text(t.uploader).font(.caption).foregroundStyle(.secondary)
             }
+            performers(t.title)
+        }
+    }
+
+    private func performers(_ title: String) -> some View {
+        let names = SubscriptionStore.performerNames(from: title)
+        return Group {
+            if !names.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(names, id: \.self) { name in
+                            Button {
+                                subs.toggle(query: name)
+                                GlassHaptic.tap()
+                            } label: {
+                                Label(name, systemImage: subs.contains(name) ? "bell.fill" : "bell")
+                                    .font(.caption.weight(.medium))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                            }
+                            .buttonStyle(.plain)
+                            .liquidGlass(tint: subs.contains(name) ? XCPalette.pink.opacity(0.35) : nil)
+                        }
+                    }
+                }
+            }
         }
     }
 

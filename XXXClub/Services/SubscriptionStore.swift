@@ -165,6 +165,37 @@ final class SubscriptionStore: ObservableObject {
         return words.first { $0.first?.isLetter == true && $0.count >= 3 } ?? ""
     }
 
+    /// 站点没有演员字段。标题里厂牌和日期后面的人名可以订阅，搜索仍走站内关键词。
+    static func performerNames(from title: String) -> [String] {
+        let words = title.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        var names: [String] = []
+        var index = 0
+        while index < words.count {
+            let word = words[index]
+            if word.caseInsensitiveCompare("and") == .orderedSame,
+               index >= 2, index + 1 < words.count,
+               isName(words[index - 2]), isName(words[index - 1]), isName(words[index + 1]) {
+                let left = words[index - 2] + " " + words[index - 1]
+                let right = words[index + 1] + " " + words[index + 2]
+                guard index + 2 < words.count, isName(words[index + 2]) else { index += 1; continue }
+                names.append(left)
+                names.append(right)
+                index += 3
+                continue
+            }
+            index += 1
+        }
+        var seen = Set<String>()
+        return names.filter { seen.insert($0.lowercased()).inserted }
+    }
+
+    private static func isName(_ word: String) -> Bool {
+        guard let first = word.first, first.isUppercase, word.count >= 2 else { return false }
+        if word.allSatisfy(\.isNumber) { return false }
+        let lower = word.lowercased()
+        return !["xxx", "mp4", "hd", "web", "and", "wet", "wild", "best", "besties", "cum", "together", "playing", "games"].contains(lower)
+    }
+
     private func addLog(id: String, title: String, query: String, message: String) {
         logs.insert(SubscriptionLog(id: id, title: title, query: query, message: message, date: Date()), at: 0)
         logs = Array(logs.prefix(40))

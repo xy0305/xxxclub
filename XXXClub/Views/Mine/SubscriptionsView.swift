@@ -15,7 +15,7 @@ struct SubscriptionsView: View {
         List {
             Section {
                 HStack {
-                    TextField("厂牌，例如 Slayed", text: $draft)
+                    TextField("厂牌或演员，例如 Lucy Mochi", text: $draft)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .submitLabel(.done)
@@ -23,7 +23,7 @@ struct SubscriptionsView: View {
                     Button("订阅") { add() }
                         .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).count < 3)
                 }
-                Text("同一部只推最高画质。作品按名字归组，不用标题里的日期。只推订阅之后新发布的。")
+                Text("可以订阅厂牌，也可以订阅标题里的演员名。同一部只推最高画质，只推订阅之后新发布的。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
