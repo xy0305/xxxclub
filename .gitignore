@@ -1,0 +1,4 @@
+dist/
+*.xcarchive
+DerivedData/
+.DS_Store
