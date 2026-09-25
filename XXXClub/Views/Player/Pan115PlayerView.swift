@@ -142,12 +142,20 @@ final class Pan115PlayerViewModel: ObservableObject {
         let magnet = magnetURL
             ?? Pan115PlaybackCache.magnet(for: movie.id)
             ?? ""
+        let hash = Self.infoHash(magnet)
 
         do {
             status = "正在 115 中搜索 \(keyword)…"
             if let existing = try? await Pan115Client.shared.findMatchedVideos(
                 keyword: keyword, cookie: cookie, limit: 100
-            ) {
+            ), !existing.isEmpty {
+                episodes = existing
+                try await play(file: existing[0], cookie: cookie)
+                return
+            }
+            if let existing = try? await Pan115Client.shared.findPlayable(
+                keyword: keyword, infoHash: hash, cookie: cookie, folderCID: cid
+            ), !existing.isEmpty {
                 episodes = existing
                 try await play(file: existing[0], cookie: cookie)
                 return
@@ -171,8 +179,8 @@ final class Pan115PlayerViewModel: ObservableObject {
             }
 
             let files = try await waitUntilPlayable(
-                keyword: keyword, cookie: cookie, folderCID: cid,
-                timeout: result == .exists ? 45 : 90)
+                keyword: keyword, infoHash: hash, cookie: cookie, folderCID: cid,
+                timeout: result == .exists ? 60 : 180)
             episodes = files
             try await play(file: files[0], cookie: cookie)
         } catch {
@@ -199,7 +207,7 @@ final class Pan115PlayerViewModel: ObservableObject {
     }
 
     private func waitUntilPlayable(
-        keyword: String, cookie: String, folderCID: String, timeout: TimeInterval
+        keyword: String, infoHash: String, cookie: String, folderCID: String, timeout: TimeInterval
     ) async throws -> [Pan115Client.FileItem] {
         let start = Date()
         while Date().timeIntervalSince(start) < timeout {
@@ -208,20 +216,21 @@ final class Pan115PlayerViewModel: ObservableObject {
             ), !files.isEmpty {
                 return files
             }
-            if let file = try? await Pan115Client.shared.findMatchedVideo(
-                keyword: keyword, cookie: cookie, folderCID: folderCID, requireMatch: true
-            ) {
-                return [file]
+            if let files = try? await Pan115Client.shared.findPlayable(
+                keyword: keyword, infoHash: infoHash, cookie: cookie, folderCID: folderCID
+            ), !files.isEmpty {
+                return files
             }
             let tasks = (try? await Pan115Client.shared.listOfflineTasks(cookie: cookie)) ?? []
-            if let hit = tasks.first(where: {
-                $0.name.localizedCaseInsensitiveContains(keyword)
-                    || $0.url.localizedCaseInsensitiveContains(keyword)
-            }) {
+            let hit = tasks.first { task in
+                (!infoHash.isEmpty && task.infoHash.lowercased() == infoHash.lowercased())
+                    || task.url.localizedCaseInsensitiveContains(infoHash)
+                    || task.name.localizedCaseInsensitiveContains(keyword)
+            }
+            if let hit {
                 if hit.isFailed { throw Pan115Error.taskFailed(hit.name) }
-                if hit.isRunning {
-                    status = "离线中 \(Int(hit.percent))%…"
-                }
+                if hit.isRunning { status = "离线中 \(Int(hit.percent))%…" }
+                else { status = "正在打开已下载文件…" }
             } else {
                 status = "任务已完成，正在匹配文件…"
             }
@@ -232,7 +241,18 @@ final class Pan115PlayerViewModel: ObservableObject {
         ), !files.isEmpty {
             return files
         }
+        if let files = try? await Pan115Client.shared.findPlayable(
+            keyword: keyword, infoHash: infoHash, cookie: cookie, folderCID: folderCID
+        ), !files.isEmpty {
+            return files
+        }
         throw Pan115Error.timeout
+    }
+
+    private static func infoHash(_ magnet: String) -> String {
+        guard let range = magnet.range(of: #"btih:([a-fA-F0-9]{40})"#, options: .regularExpression) else { return "" }
+        let token = magnet[range]
+        return String(token.dropFirst(5)).lowercased()
     }
 
     private func play(file: Pan115Client.FileItem, cookie: String) async throws {

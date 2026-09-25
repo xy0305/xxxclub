@@ -313,6 +313,90 @@ public final class Pan115Client: @unchecked Sendable {
         throw lastError
     }
 
+    /// 欧美标题会被 115 缩短成厂牌缩写加日期。先按 hash 搜，再按短名对，最后进离线目录。
+    public func findPlayable(
+        keyword: String,
+        infoHash: String,
+        cookie: String,
+        folderCID: String
+    ) async throws -> [FileItem] {
+        if !infoHash.isEmpty {
+            let hashed = (try? await searchFiles(keyword: infoHash, cookie: cookie, limit: 20)) ?? []
+            let videos = hashed.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
+            if !videos.isEmpty { return videos }
+        }
+        let queries = playQueries(keyword)
+        var hits: [FileItem] = []
+        for query in queries {
+            let files = (try? await searchFiles(keyword: query, cookie: cookie, limit: 40)) ?? []
+            let matched = files.filter { file in
+                !file.isDir && file.isVideo && !file.pickCode.isEmpty && looseMatch(file.name, keyword: keyword)
+            }
+            let known = Set(hits.map { $0.fileID.isEmpty ? $0.pickCode : $0.fileID })
+            hits.append(contentsOf: matched.filter { !known.contains($0.fileID.isEmpty ? $0.pickCode : $0.fileID) })
+            if !hits.isEmpty { return hits.sorted { $0.size > $1.size } }
+        }
+        if !folderCID.isEmpty {
+            let listed = (try? await listFiles(cid: folderCID, cookie: cookie, limit: 500)) ?? []
+            let dirs = listed.filter(\.isDir)
+            for dir in dirs.prefix(12) where looseMatch(dir.name, keyword: keyword) || (!infoHash.isEmpty && dir.name.lowercased().contains(infoHash.prefix(8))) {
+                let nested = (try? await listFiles(cid: dir.fileID.isEmpty ? dir.cid : dir.fileID, cookie: cookie, limit: 200)) ?? []
+                let videos = nested.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
+                if !videos.isEmpty { return videos.sorted { $0.size > $1.size } }
+            }
+            let videos = listed.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty && looseMatch($0.name, keyword: keyword) }
+            if !videos.isEmpty { return videos.sorted { $0.size > $1.size } }
+        }
+        throw Pan115Error.fileNotFound
+    }
+
+    private func playQueries(_ raw: String) -> [String] {
+        let words = raw.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let studio = words.first { $0.first?.isLetter == true && $0.count >= 4 } ?? ""
+        let nums = words.filter { $0.allSatisfy(\.isNumber) && $0.count >= 2 }
+        var queries: [String] = []
+        if studio.count >= 4, nums.count >= 3 {
+            queries.append("\(studio.prefix(3)).\(nums[0]).\(nums[1]).\(nums[2])")
+            queries.append(studioInitials(studio) + ".\(nums[0]).\(nums[1]).\(nums[2])")
+            queries.append("\(studio) \(nums[0]) \(nums[1]) \(nums[2])")
+        }
+        if let scene = words.last(where: { $0.allSatisfy(\.isNumber) && $0.count >= 4 }) {
+            queries.append(scene)
+        }
+        if let name = words.dropFirst().first(where: { $0.first?.isLetter == true && $0.count >= 4 }) {
+            queries.append(name)
+        }
+        if !studio.isEmpty { queries.append(studio) }
+        var seen = Set<String>()
+        return queries.filter { seen.insert($0.lowercased()).inserted }
+    }
+
+    private func looseMatch(_ filename: String, keyword: String) -> Bool {
+        let name = normalizedKey(filename)
+        let key = normalizedKey(keyword)
+        if !key.isEmpty, name.contains(key) || key.contains(name), name.count >= 8 { return true }
+        let words = keyword.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let studio = (words.first { $0.first?.isLetter == true && $0.count >= 4 } ?? "")
+        let shorts = [String(studio.prefix(3)), studioInitials(studio)]
+            .map { $0.lowercased() }
+            .filter { $0.count >= 2 }
+        let nums = words.filter { $0.allSatisfy(\.isNumber) && ($0.count == 2 || $0.count >= 4) }.map { $0.lowercased() }
+        guard shorts.contains(where: { name.contains($0) }) else { return false }
+        let hit = nums.filter { name.contains($0) }
+        return hit.count >= min(3, nums.count)
+    }
+
+    /// PornMegaLoad → pml。115 经常用这种缩写命名离线文件。
+    private func studioInitials(_ studio: String) -> String {
+        let parts = studio.split { $0.isLowercase == false && $0.isLetter }
+        if parts.count >= 2 {
+            return parts.compactMap(\.first).map(String.init).joined()
+        }
+        var caps = studio.filter { $0.isUppercase }
+        if caps.isEmpty, let first = studio.first { caps = String(first) }
+        return String(caps.prefix(4))
+    }
+
     /// 按番号匹配 115 的全部视频文件，支持同一番号多集。
     public func findMatchedVideos(
         keyword: String,
