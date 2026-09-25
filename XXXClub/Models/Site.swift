@@ -80,6 +80,7 @@ struct XCDetail {
     var descriptionText: String
     var files: [XCFile]
     var screenshots: [URL]
+    var similar: [XCTorrent]
 
     var torrentURL: URL? {
         URL(string: Site.origin + torrentPath)

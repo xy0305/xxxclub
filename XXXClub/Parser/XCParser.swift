@@ -213,6 +213,7 @@ enum XCParser {
         let description = cleanDescription(descRaw)
         let files = parseFiles(html)
         let shots = screenshotURLs(descRaw)
+        let similar = parseSimilar(html)
 
         let torrent = XCTorrent(
             id: id, title: title, coverURL: cover,
@@ -223,8 +224,13 @@ enum XCParser {
         return XCDetail(
             torrent: torrent, infoHash: hash, magnet: magnet, torrentPath: torrentPath,
             downloads: downloads, likes: likes, dislikes: dislikes, lastScraped: scraped,
-            descriptionText: description, files: files, screenshots: shots
+            descriptionText: description, files: files, screenshots: shots, similar: similar
         )
+    }
+
+    static func parseSimilar(_ html: String) -> [XCTorrent] {
+        guard let block = HTML.first(html, pattern: "class=['\\\"]similardiv['\\\"][\\s\\S]*?(?=<div class=['\\\"]footer|$)") else { return [] }
+        return parseRows(block)
     }
 
     static func parseFiles(_ html: String) -> [XCFile] {

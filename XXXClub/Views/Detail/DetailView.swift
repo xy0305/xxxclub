@@ -30,6 +30,7 @@ struct DetailView: View {
                 if let detail, !detail.files.isEmpty { files(detail) }
                 if let text = detail?.descriptionText, !text.isEmpty { description(text) }
                 if let shots = detail?.screenshots, !shots.isEmpty { shotsRow(shots) }
+                if let similar = detail?.similar, !similar.isEmpty { similarSection(similar) }
                 if let error, detail == nil {
                     Text(error).font(.caption).foregroundStyle(.secondary)
                 }
@@ -226,6 +227,28 @@ struct DetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .liquidGlassRect(cornerRadius: 16)
         .padding(.horizontal, AdaptiveLayout.horizontalPadding)
+    }
+
+    private func similarSection(_ items: [XCTorrent]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("相似推荐")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, AdaptiveLayout.horizontalPadding)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(items) { item in
+                        NavigationLink {
+                            DetailView(id: item.id, preview: item)
+                        } label: {
+                            PosterCard(torrent: item)
+                                .frame(width: 140)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, AdaptiveLayout.horizontalPadding)
+            }
+        }
     }
 
     private func shotsRow(_ urls: [URL]) -> some View {
