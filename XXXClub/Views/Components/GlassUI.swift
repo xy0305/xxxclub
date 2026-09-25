@@ -232,6 +232,21 @@ extension View {
         scrollContentBackground(.hidden)
             .background { LiquidGlassBackground() }
     }
+
+    func glassSurface<S: InsettableShape>(
+        in shape: S,
+        tint: Color? = nil,
+        tintStrength: Double = 0.18,
+        elevation: CGFloat = 1
+    ) -> some View {
+        background {
+            shape.fill(.ultraThinMaterial)
+            if let tint {
+                shape.fill(tint.opacity(tintStrength))
+            }
+        }
+        .overlay { GlassRim(shape: shape) }
+    }
 }
 
 struct GlassChip: View {

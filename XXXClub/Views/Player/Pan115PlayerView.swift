@@ -259,4 +259,8 @@ enum Pan115PlaybackCache {
     static func magnet(for movieID: String) -> String? {
         UserDefaults.standard.string(forKey: key(movieID))
     }
+
+    static func hasMagnet(_ id: String) -> Bool {
+        !(magnet(for: id) ?? "").isEmpty
+    }
 }
