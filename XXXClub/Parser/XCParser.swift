@@ -229,8 +229,34 @@ enum XCParser {
     }
 
     static func parseSimilar(_ html: String) -> [XCTorrent] {
-        guard let block = HTML.first(html, pattern: "class=['\\\"]similardiv['\\\"][\\s\\S]*?(?=<div class=['\\\"]footer|$)") else { return [] }
-        return parseRows(block)
+        guard let start = html.range(of: "similardiv", options: .caseInsensitive) else { return [] }
+        let tail = String(html[start.lowerBound...])
+        let end = tail.range(of: "class=\"footer\"") ?? tail.range(of: "class='footer'")
+        let block = end.map { String(tail[..<$0.lowerBound]) } ?? String(tail.prefix(20_000))
+        let items = HTML.blocks(block, pattern: "<li>[\\s\\S]*?</li>")
+        var out: [XCTorrent] = []
+        var seen = Set<String>()
+        for li in items {
+            guard let href = HTML.first(li, pattern: "href=['\\\"](/torrents/details/[^'\\\"]+)['\\\"]") else { continue }
+            let id = String(href.split(separator: "/").last ?? "")
+            guard !id.isEmpty, seen.insert(id).inserted else { continue }
+            let title = HTML.strip(HTML.first(li, pattern: "href=['\\\"]/torrents/details/[^'\\\"]+['\\\"][^>]*>([\\s\\S]*?)</a>") ?? "")
+            guard !title.isEmpty else { continue }
+            let catID = HTML.first(li, pattern: "href=['\\\"]/torrents/browse/(\\d+)/?['\\\"]") ?? ""
+            let catName = HTML.strip(HTML.first(li, pattern: "class=['\\\"]catla['\\\"]>([\\s\\S]*?)</lab(?:el|le)>") ?? "")
+            let cover = HTML.abs(HTML.attr(HTML.first(li, pattern: "<img\\b[^>]*>") ?? "", "src"))
+            let added = HTML.strip(HTML.first(li, pattern: "class=['\\\"]adde[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            let size = HTML.strip(HTML.first(li, pattern: "class=['\\\"]siz[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            let seeds = HTML.int(HTML.first(li, pattern: "class=['\\\"]see[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            let leech = HTML.int(HTML.first(li, pattern: "class=['\\\"]lee[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            out.append(XCTorrent(
+                id: id, title: title, coverURL: cover,
+                categoryID: catID, categoryName: catName,
+                added: shortDate(added), size: size,
+                seeders: seeds, leechers: leech, uploader: "", rank: nil
+            ))
+        }
+        return out
     }
 
     static func parseFiles(_ html: String) -> [XCFile] {

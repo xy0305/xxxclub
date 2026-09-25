@@ -30,8 +30,8 @@ struct DetailView: View {
                 facts
                 if let detail, !detail.files.isEmpty { files(detail) }
                 if let text = detail?.descriptionText, !text.isEmpty { description(text) }
-                if let shots = detail?.screenshots, !shots.isEmpty { shotsRow(shots) }
                 if let similar = detail?.similar, !similar.isEmpty { similarSection(similar) }
+                if let shots = detail?.screenshots, !shots.isEmpty { shotsRow(shots) }
                 if let error, detail == nil {
                     Text(error).font(.caption).foregroundStyle(.secondary)
                 }
