@@ -3,6 +3,8 @@
 //  XXXClub
 //
 //  分类浏览。翻页只跟可见的 Next Page。
+//  底部转圈如果没进入可视区，onAppear 不会触发，看起来就像一直在转。
+//  所以有下一页就直接继续拉，直到没有新内容或没有下一页。
 //
 
 import SwiftUI
@@ -13,6 +15,7 @@ struct BrowseView: View {
     @State private var next: String?
     @State private var loading = false
     @State private var error: String?
+    @State private var started = false
 
     private var title: String {
         Site.category(id: categoryID)?.name ?? "浏览"
@@ -30,7 +33,7 @@ struct BrowseView: View {
                     .foregroundStyle(.secondary)
                     .padding()
             }
-            if next != nil {
+            if next != nil || loading {
                 ProgressView()
                     .padding()
                     .onAppear { Task { await loadMore() } }
@@ -40,13 +43,18 @@ struct BrowseView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .nestedListChrome()
-        .task { if items.isEmpty { await reload() } }
+        .task {
+            guard !started else { return }
+            started = true
+            await reload()
+        }
         .refreshable { await reload() }
     }
 
     private func reload() async {
         items = []
         next = nil
+        error = nil
         await loadMore()
     }
 
@@ -54,15 +62,25 @@ struct BrowseView: View {
         guard !loading else { return }
         loading = true
         defer { loading = false }
-        do {
-            let page = try await XCClient.shared.browse(categoryID: categoryID, cursor: next)
-            let known = Set(items.map(\.id))
-            items.append(contentsOf: page.items.filter { !known.contains($0.id) })
-            next = page.next
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-            next = nil
+        var cursor = next
+        var pages = 0
+        while pages < 4 {
+            do {
+                let page = try await XCClient.shared.browse(categoryID: categoryID, cursor: cursor)
+                let known = Set(items.map(\.id))
+                let fresh = page.items.filter { !known.contains($0.id) }
+                if !fresh.isEmpty { items.append(contentsOf: fresh) }
+                error = nil
+                let samePage = page.next == cursor
+                cursor = page.next
+                next = cursor
+                pages += 1
+                if fresh.isEmpty || cursor == nil || samePage { break }
+            } catch {
+                self.error = error.localizedDescription
+                next = nil
+                break
+            }
         }
     }
 }
