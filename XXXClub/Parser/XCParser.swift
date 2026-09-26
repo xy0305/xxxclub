@@ -92,7 +92,7 @@ enum XCParser {
     /// 后面的页会在每一行里塞隐藏的 Next Page，那个链接自己带 </li>。
     /// 用第一个 </li> 切会把真实行切碎，所以按分类标签开头切。
     static func parseRows(_ html: String) -> [XCTorrent] {
-        let lis = HTML.blocks(html, pattern: "<li[\\s>][\\s\\S]*?<span class=['\\\"]catlabe['\\\"]>[\\s\\S]*?(?=<li[\\s>]|$)")
+        let lis = HTML.blocks(html, pattern: "<span class=['\\\"]catlabe['\\\"]>[\\s\\S]*?(?=<span class=['\\\"]catlabe['\\\"]>|$)")
         var out: [XCTorrent] = []
         var seen = Set<String>()
         for li in lis {
