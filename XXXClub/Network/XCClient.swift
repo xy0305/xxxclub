@@ -28,12 +28,13 @@ enum XCError: LocalizedError {
 final class XCClient {
     static let shared = XCClient()
 
-    private let session: URLSession
+    let session: URLSession
 
     private init() {
         let config = URLSessionConfiguration.default
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
+        config.httpMaximumConnectionsPerHost = 6
         config.timeoutIntervalForRequest = 30
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: config)

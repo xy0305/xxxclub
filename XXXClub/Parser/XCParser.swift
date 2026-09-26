@@ -105,8 +105,8 @@ enum XCParser {
             let window = String(html[start...].prefix(1800))
             let catID = HTML.first(window, pattern: "href=['\\\"]/torrents/browse/(\\d+)/?['\\\"]") ?? ""
             let catName = HTML.strip(HTML.first(window, pattern: "class=['\\\"]catla['\\\"]>([\\s\\S]*?)</lab") ?? "")
-            let cover = HTML.abs(HTML.attr(HTML.first(window, pattern: "<img\\b[^>]*floaterimg[^>]*>") ?? "", "src")
-                ?? HTML.first(link, pattern: "src=['\\\"]([^'\\\"]+)['\\\"]"))
+            let cover = HTML.abs(posterURL(HTML.attr(HTML.first(window, pattern: "<img\\b[^>]*floaterimg[^>]*>") ?? "", "src")
+                ?? HTML.first(link, pattern: "src=['\\\"]([^'\\\"]+)['\\\"]")))
             let added = HTML.strip(HTML.first(window, pattern: "class=['\\\"]adde[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
             let size = HTML.strip(HTML.first(window, pattern: "class=['\\\"]siz[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
             let seeds = HTML.int(HTML.first(window, pattern: "class=['\\\"]see[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
@@ -122,6 +122,13 @@ enum XCParser {
         return out
     }
 
+    /// 列表里的 /ps/ 是悬停小图，页面上看见的封面是 /p/ 大图。
+    static func posterURL(_ raw: String?) -> String? {
+        guard var raw, !raw.isEmpty else { return nil }
+        raw = raw.replacingOccurrences(of: "/ps/", with: "/p/")
+        return raw
+    }
+
     static func parseRecommend(_ html: String) -> [XCTorrent] {
         let anchors = HTML.blocks(html, pattern: "<a href=['\\\"]/torrents/details/[^'\\\"]+['\\\"][\\s\\S]*?</a>")
         var out: [XCTorrent] = []
@@ -133,7 +140,7 @@ enum XCParser {
             let title = HTML.decode(HTML.attr(a, "title") ?? HTML.attr(a, "alt") ?? "")
                 .replacingOccurrences(of: "Details Of ", with: "")
                 .replacingOccurrences(of: "Poster Of ", with: "")
-            let cover = HTML.abs(HTML.first(a, pattern: "src=['\\\"]([^'\\\"]+)['\\\"]"))
+            let cover = HTML.abs(posterURL(HTML.first(a, pattern: "src=['\\\"]([^'\\\"]+)['\\\"]")))
             out.append(XCTorrent(
                 id: id, title: title, coverURL: cover,
                 categoryID: "", categoryName: "", added: "", size: "",

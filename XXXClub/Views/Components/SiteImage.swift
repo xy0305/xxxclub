@@ -58,14 +58,7 @@ struct SiteImage: View {
 enum SiteImageCache {
     static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
     private static let cache = NSCache<NSURL, UIImage>()
-    private static let session: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.httpMaximumConnectionsPerHost = 6
-        config.requestCachePolicy = .returnCacheDataElseLoad
-        config.urlCache = URLCache.shared
-        config.timeoutIntervalForRequest = 25
-        return URLSession(configuration: config)
-    }()
+    private static let session = XCClient.shared.session
 
     static func image(for url: URL) -> UIImage? {
         cache.object(forKey: url as NSURL)
