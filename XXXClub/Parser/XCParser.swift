@@ -89,27 +89,29 @@ enum XCParser {
     }
 
     /// 浏览 / 搜索 / Top100 的行。
-    /// 后面的页会在每一行里塞隐藏的 Next Page，那个链接自己带 </li>。
-    /// 用第一个 </li> 切会把真实行切碎，所以按分类标签开头切。
+    /// 站点会把隐藏的 Next Page 塞进行里，不能按 </li> 切。
+    /// 分类标签的 class 写法也会变，所以按每条详情链接切。
     static func parseRows(_ html: String) -> [XCTorrent] {
-        let lis = HTML.blocks(html, pattern: "<span class=['\\\"]catlabe['\\\"]>[\\s\\S]*?(?=<span class=['\\\"]catlabe['\\\"]>|$)")
+        let links = HTML.blocks(html, pattern: "<a\\b[^>]*href=['\\\"]/torrents/details/[^'\\\"]+['\\\"][^>]*>[\\s\\S]*?</a>")
         var out: [XCTorrent] = []
         var seen = Set<String>()
-        for li in lis {
-            guard li.contains("torrents/details/") else { continue }
-            guard let href = HTML.first(li, pattern: "href=['\\\"](/torrents/details/[^'\\\"]+)['\\\"]") else { continue }
+        for link in links {
+            guard let href = HTML.first(link, pattern: "href=['\\\"](/torrents/details/[^'\\\"]+)['\\\"]") else { continue }
             let id = href.split(separator: "/").last.map(String.init) ?? href
-            guard seen.insert(id).inserted else { continue }
-            let title = HTML.strip(HTML.first(li, pattern: "href=['\\\"]/torrents/details/[^'\\\"]+['\\\"][^>]*>([\\s\\S]*?)</a>") ?? "")
-            guard !title.isEmpty, title != "Next Page" else { continue }
-            let catID = (HTML.first(li, pattern: "href=['\\\"]/torrents/browse/(\\d+)/?['\\\"]") ?? "")
-            let catName = HTML.strip(HTML.first(li, pattern: "class=['\\\"]catla['\\\"]>([\\s\\S]*?)</lab(?:el|le)>") ?? "")
-            let cover = HTML.abs(HTML.attr(HTML.first(li, pattern: "<img\\b[^>]*floaterimg[^>]*>") ?? "", "src"))
-            let added = HTML.strip(HTML.first(li, pattern: "addedtable[^>]*>([\\s\\S]*?)</span>") ?? "")
-            let size = HTML.strip(HTML.first(li, pattern: "class=['\\\"]siz[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
-            let seeds = HTML.int(HTML.first(li, pattern: "class=['\\\"]see[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
-            let leech = HTML.int(HTML.first(li, pattern: "class=['\\\"]lee[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
-            let up = HTML.strip(HTML.first(li, pattern: "uploadertable[^>]*>([\\s\\S]*?)</span>") ?? "")
+            guard !id.isEmpty, seen.insert(id).inserted else { continue }
+            let title = HTML.strip(HTML.first(link, pattern: ">([\\s\\S]*?)</a>") ?? "")
+            guard title.count > 8, title != "Next Page", !title.contains("Poster Of") else { continue }
+            let start = html.range(of: link)?.lowerBound ?? html.startIndex
+            let window = String(html[start...].prefix(1800))
+            let catID = HTML.first(window, pattern: "href=['\\\"]/torrents/browse/(\\d+)/?['\\\"]") ?? ""
+            let catName = HTML.strip(HTML.first(window, pattern: "class=['\\\"]catla['\\\"]>([\\s\\S]*?)</lab") ?? "")
+            let cover = HTML.abs(HTML.attr(HTML.first(window, pattern: "<img\\b[^>]*floaterimg[^>]*>") ?? "", "src")
+                ?? HTML.first(link, pattern: "src=['\\\"]([^'\\\"]+)['\\\"]"))
+            let added = HTML.strip(HTML.first(window, pattern: "class=['\\\"]adde[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            let size = HTML.strip(HTML.first(window, pattern: "class=['\\\"]siz[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            let seeds = HTML.int(HTML.first(window, pattern: "class=['\\\"]see[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            let leech = HTML.int(HTML.first(window, pattern: "class=['\\\"]lee[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
+            let up = HTML.strip(HTML.first(window, pattern: "uploadertable[^>]*>([\\s\\S]*?)</span>") ?? "")
             out.append(XCTorrent(
                 id: id, title: title, coverURL: cover,
                 categoryID: catID, categoryName: catName,
