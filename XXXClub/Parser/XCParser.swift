@@ -88,9 +88,11 @@ enum XCParser {
         return (items, nextPath(html))
     }
 
-    /// 浏览 / 搜索 / Top100 的行。封面在 floaterimg，src 用单引号。
+    /// 浏览 / 搜索 / Top100 的行。
+    /// 后面的页会在每一行里塞隐藏的 Next Page，那个链接自己带 </li>。
+    /// 用第一个 </li> 切会把真实行切碎，所以按分类标签开头切。
     static func parseRows(_ html: String) -> [XCTorrent] {
-        let lis = HTML.blocks(html, pattern: "<li[\\s>][\\s\\S]*?</li>")
+        let lis = HTML.blocks(html, pattern: "<li[\\s>][\\s\\S]*?<span class=['\\\"]catlabe['\\\"]>[\\s\\S]*?(?=<li[\\s>]|$)")
         var out: [XCTorrent] = []
         var seen = Set<String>()
         for li in lis {
@@ -102,7 +104,7 @@ enum XCParser {
             guard !title.isEmpty, title != "Next Page" else { continue }
             let catID = (HTML.first(li, pattern: "href=['\\\"]/torrents/browse/(\\d+)/?['\\\"]") ?? "")
             let catName = HTML.strip(HTML.first(li, pattern: "class=['\\\"]catla['\\\"]>([\\s\\S]*?)</lab(?:el|le)>") ?? "")
-            let cover = HTML.abs(HTML.first(li, pattern: "class=['\\\"]floaterimg['\\\"][^>]*src=['\\\"]([^'\\\"]+)['\\\"]"))
+            let cover = HTML.abs(HTML.attr(HTML.first(li, pattern: "<img\\b[^>]*floaterimg[^>]*>") ?? "", "src"))
             let added = HTML.strip(HTML.first(li, pattern: "addedtable[^>]*>([\\s\\S]*?)</span>") ?? "")
             let size = HTML.strip(HTML.first(li, pattern: "class=['\\\"]siz[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
             let seeds = HTML.int(HTML.first(li, pattern: "class=['\\\"]see[^'\\\"]*['\\\"][^>]*>([\\s\\S]*?)</span>") ?? "")
