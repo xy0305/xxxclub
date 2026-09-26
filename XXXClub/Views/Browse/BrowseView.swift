@@ -35,7 +35,8 @@ struct BrowseView: View {
             }
             if next != nil || loading {
                 ProgressView()
-                    .padding()
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: .infinity)
                     .onAppear { Task { await loadMore() } }
             }
         }
