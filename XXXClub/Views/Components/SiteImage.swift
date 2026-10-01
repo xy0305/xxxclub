@@ -41,9 +41,10 @@ struct SiteImage: View {
             image = cached
             return
         }
-        var decoded = await SiteImageCache.fetch(url, headers: false)
+        var decoded = await SiteImageCache.fetch(url)
         if decoded == nil, !Task.isCancelled {
-            decoded = await SiteImageCache.fetch(url, headers: true)
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            decoded = await SiteImageCache.fetch(url)
         }
         if let decoded {
             SiteImageCache.store(decoded, for: url)
@@ -75,13 +76,11 @@ enum SiteImageCache {
         cache.setObject(image, forKey: url as NSURL)
     }
 
-    static func fetch(_ url: URL, headers: Bool) async -> UIImage? {
-        var req = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 20)
-        if headers {
-            req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-            req.setValue("https://xxxclub.to/", forHTTPHeaderField: "Referer")
-            req.setValue("image/avif,image/webp,image/apng,image/jpeg,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        }
+    static func fetch(_ url: URL) async -> UIImage? {
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 25)
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("https://xxxclub.to/", forHTTPHeaderField: "Referer")
+        req.setValue("image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5", forHTTPHeaderField: "Accept")
         do {
             let (data, response) = try await session.data(for: req)
             guard !Task.isCancelled else { return nil }
