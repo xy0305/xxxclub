@@ -60,10 +60,14 @@ enum HTML {
             return nil
         }
         let ns = html as NSString
-        guard let m = regex.firstMatch(in: html, range: NSRange(location: 0, length: ns.length)), m.numberOfRanges > 1 else {
+        guard let m = regex.firstMatch(in: html, range: NSRange(location: 0, length: ns.length)) else {
             return nil
         }
-        return ns.substring(with: m.range(at: 1))
+        // With a capture group return group 1; otherwise return the complete match.
+        // Tag queries such as <img...> deliberately have no capture group.
+        let range = m.numberOfRanges > 1 ? m.range(at: 1) : m.range
+        guard range.location != NSNotFound else { return nil }
+        return ns.substring(with: range)
     }
 
     static func abs(_ raw: String?) -> URL? {

@@ -32,6 +32,12 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
 
+      - name: Run production Swift parser regression tests
+        run: |
+          set -euo pipefail
+          swiftc XXXClub/Models/Site.swift XXXClub/Parser/XCParser.swift Tests/ParserRegression/main.swift -o /tmp/xc-parser-tests
+          /tmp/xc-parser-tests Tests/ParserRegression/Fixtures/*.html
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail
