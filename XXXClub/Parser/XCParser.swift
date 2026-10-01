@@ -101,7 +101,7 @@ enum XCParser {
             guard !id.isEmpty, seen.insert(id).inserted else { continue }
             let title = HTML.strip(HTML.first(link, pattern: ">([\\s\\S]*?)</a>") ?? "")
             guard title.count > 8, title != "Next Page", !title.contains("Poster Of") else { continue }
-            let start = html.range(of: link)?.lowerBound ?? html.startIndex
+            let start = html.range(of: link)?.upperBound ?? html.startIndex
             let window = String(html[start...].prefix(1800))
             let catID = HTML.first(window, pattern: "href=['\\\"]/torrents/browse/(\\d+)/?['\\\"]") ?? ""
             let catName = HTML.strip(HTML.first(window, pattern: "class=['\\\"]catla['\\\"]>([\\s\\S]*?)</lab") ?? "")
