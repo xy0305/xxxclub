@@ -558,7 +558,7 @@ public final class Pan115Client: @unchecked Sendable {
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
         configuration.timeoutIntervalForRequest = 15
-        let downloadSession = URLSession(configuration: configuration)
+        let downloadSession = URLSession(configuration: configuration, delegate: Pan115DownloadRedirectGuard(), delegateQueue: nil)
         defer { downloadSession.invalidateAndCancel() }
         for endpoint in ["https://webapi.115.com/files/download", "https://proapi.115.com/app/chrome/downurl"] {
             var request = URLRequest(url: URL(string: endpoint)!)
@@ -591,6 +591,17 @@ public final class Pan115Client: @unchecked Sendable {
                   size == 0 || returnedSize == 0 || returnedSize == size else { continue }
             let headers = Pan115PlaybackRouting.downloadHeaders(url: url, response: http,
                 userAgent: request.value(forHTTPHeaderField: "User-Agent") ?? Self.safariUA)
+            // Bounded streaming probe: never collect a full video if the server ignores Range.
+            var probe = URLRequest(url: url)
+            probe.timeoutInterval = 8
+            probe.httpShouldHandleCookies = false
+            for (name, value) in headers { probe.setValue(value, forHTTPHeaderField: name) }
+            probe.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+            guard let (bytes, probeResponse) = try? await downloadSession.bytes(for: probe),
+                  let probeHTTP = probeResponse as? HTTPURLResponse,
+                  probeHTTP.statusCode == 206 else { continue }
+            var iterator = bytes.makeAsyncIterator()
+            guard (try? await iterator.next()) != nil else { continue }
             return PlayStream(name: "原文件（源文件）", url: url.absoluteString,
                 bandwidth: 0, isOriginal: true, playbackHeaders: headers)
         }

@@ -18,6 +18,7 @@ struct KSChromePlayer: View {
     var subtitle: String = ""
     var headers: [String: String] = [:]
     var onQualitySelection: (() -> Void)? = nil
+    var onPlaybackFailure: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var coordinator = KSVideoPlayer.Coordinator()
@@ -417,6 +418,10 @@ struct KSChromePlayer: View {
 
     private func wireCoordinator() {
         coordinator.isMaskShow = false
+        coordinator.onFinish = { _, error in
+            guard error != nil else { return }
+            Task { @MainActor in onPlaybackFailure?() }
+        }
         coordinator.onStateChanged = { _, state in
             Task { @MainActor in
                 isPlaying = state.isPlaying

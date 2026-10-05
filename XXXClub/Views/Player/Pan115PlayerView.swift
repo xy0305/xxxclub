@@ -26,7 +26,8 @@ struct Pan115PlayerView: View {
                     title: movie.title,
                     subtitle: vm.qualityLabel,
                     headers: vm.headers,
-                    onQualitySelection: vm.streams.count > 1 ? { showQuality = true } : nil
+                    onQualitySelection: vm.streams.count > 1 ? { showQuality = true } : nil,
+                    onPlaybackFailure: { Task { await vm.recoverPlayback() } }
                 )
                 .id(url.absoluteString)
             } else if let err = vm.errorMessage {
@@ -131,6 +132,29 @@ final class Pan115PlayerViewModel: ObservableObject {
     @Published var playURL: URL?
     @Published var streams: [Pan115Client.PlayStream] = []
     @Published var qualityLabel = "等待选流"
+    private var activeFile: Pan115Client.FileItem?
+    private var refreshedSource = false
+
+    func recoverPlayback() async {
+        guard !isLoading, let file = activeFile else { return }
+        let wasSource = streams.first(where: { $0.url == playURL?.absoluteString })?.isOriginal == true
+        guard wasSource else { errorMessage = "转码播放失败，请重试"; return }
+        if !refreshedSource {
+            refreshedSource = true
+            isLoading = true
+            let refreshed = try? await Pan115Client.shared.sourceStream(pickCode: file.pickCode,
+                cookie: Pan115Settings.shared.cookie, filename: file.name, fileID: file.fileID, size: file.size)
+            isLoading = false
+            if let refreshed {
+                streams.removeAll { $0.isOriginal }
+                streams.insert(refreshed, at: 0)
+                select(refreshed)
+                return
+            }
+        }
+        if let fallback = streams.first(where: { !$0.isOriginal }) { select(fallback) }
+        else { errorMessage = "源文件链接已失效，暂无可用转码，请重试" }
+    }
 
     var headers: [String: String] {
         guard let url = playURL else { return [:] }
@@ -272,6 +296,8 @@ final class Pan115PlayerViewModel: ObservableObject {
     }
 
     private func play(file: Pan115Client.FileItem, cookie: String) async throws {
+        activeFile = file
+        refreshedSource = false
         fileName = file.name
         status = "获取 115 播放地址…"
         let list = try await Pan115Client.shared.streamsForVideo(
