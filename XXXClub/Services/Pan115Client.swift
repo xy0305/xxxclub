@@ -176,6 +176,8 @@ public final class Pan115Client: @unchecked Sendable {
         public let cid: String
         public let isDir: Bool
         public let size: Int64
+        public var trustedSceneFolder = false
+        public var requiresManualSelection = false
 
         public var isVideo: Bool {
             let n = name.lowercased()
@@ -291,7 +293,8 @@ public final class Pan115Client: @unchecked Sendable {
     /// 而 `proapi.115.com` / `aps.115.com` 通常正常。把可用的域名排前面，webapi 降级为后备。
     public func searchFiles(keyword: String, cookie: String, limit: Int = 30) async throws -> [FileItem] {
         let kw = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        let encoded = (kw.isEmpty ? ".mp4" : kw).formEncoded
+        guard !kw.isEmpty else { throw Pan115Error.fileNotFound }
+        let encoded = kw.formEncoded
         // Live read-only tests: web search returns the requested scene; Android search
         // can return unrelated first-page rows. aps files.php is a listing, not search.
         let urls = [
@@ -320,11 +323,70 @@ public final class Pan115Client: @unchecked Sendable {
         throw lastError
     }
 
+    /// Bounded web directory search. 115 may ignore query/type: validate every row.
+    private func sceneFolderVideos(keyword: String, cookie: String) async throws -> [FileItem]? {
+        let queries = Pan115Identity.folderQueries(keyword)
+        guard !queries.isEmpty else { return nil }
+        var folders: [FileItem] = []
+        for query in queries {
+            for page in 0..<3 {
+                try Task.checkCancellation()
+                let url = URL(string: "https://webapi.115.com/files/search?search_value=\(query.formEncoded)&type=0&show_dir=1&limit=100&offset=\(page * 100)&format=json")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 5
+                appendCommonHeaders(&request, cookie: cookie)
+                let object = try await json(for: request, retries: 0)
+                let rows = extractFileList(object)
+                folders.append(contentsOf: rows.filter {
+                    $0.isDir && !$0.cid.isEmpty
+                        && Pan115Identity.distinguishedName($0.name, title: keyword)
+                })
+                let count = intValue(object["count"])
+                if page == 2 && count > 300 { throw Pan115Error.api("目录搜索结果超出安全分页范围，请使用更精确的标题") }
+                if count > 0 ? (page + 1) * 100 >= count : rows.count < 100 { break }
+            }
+        }
+        var seen = Set<String>()
+        folders = folders.filter { seen.insert($0.cid).inserted }
+        guard !folders.isEmpty else { return nil }
+        // Never fan out to a disk scan, or silently omit ambiguous matched folders.
+        guard folders.count <= 8 else { throw Pan115Error.api("精确匹配目录过多，请在 115 中核对重复目录") }
+        var videos: [FileItem] = []
+        for folder in folders {
+            for page in 0..<3 {
+                try Task.checkCancellation()
+                let url = URL(string: "https://webapi.115.com/files?cid=\(folder.cid.formEncoded)&show_dir=1&limit=100&offset=\(page * 100)&format=json")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 5
+                appendCommonHeaders(&request, cookie: cookie)
+                let object = try await json(for: request, retries: 0)
+                let rows = extractFileList(object)
+                videos.append(contentsOf: rows.filter {
+                    !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty
+                        && Pan115Identity.folderVideo($0.name, title: keyword)
+                }.map { file in
+                    var item = file
+                    item.trustedSceneFolder = true
+                    item.requiresManualSelection = folders.count > 1
+                    return item
+                })
+                let count = intValue(object["count"])
+                if count > 0 ? (page + 1) * 100 >= count : rows.count < 100 { break }
+                if page == 2 { throw Pan115Error.api("匹配目录文件过多，无法完整核对，请手动整理") }
+            }
+        }
+        guard !videos.isEmpty else { throw Pan115Error.api("已匹配发行目录，但没有兼容的主视频；不会改选其他目录") }
+        return videos.uniquedFiles
+    }
+
     /// Studio + RELEASE date selects candidates first, never proves playback identity.
     public func findPlayable(
         keyword: String, infoHash: String, cookie: String, folderCID: String,
         manifest: [String] = []
     ) async throws -> [FileItem] {
+        if let videos = try await sceneFolderVideos(keyword: keyword, cookie: cookie) { return videos }
         var studioHits: [FileItem] = []
         let compact = Pan115Identity.semanticTokens(keyword).joined(separator: ".")
         let sceneQueries = Array(([compact] + Pan115Identity.studioDateQueries(keyword)).prefix(5))
@@ -974,7 +1036,7 @@ public final class Pan115Client: @unchecked Sendable {
             let fid = stringValue(item["fid"] ?? item["file_id"] ?? item["id"])
             let cid = stringValue(item["cid"] ?? item["pid"])
             let isDir = (item["pc"] == nil && item["pick_code"] == nil && item["pickcode"] == nil && item["sha"] == nil && item["sha1"] == nil && !cid.isEmpty && pc.isEmpty)
-                || intValue(item["fc"]) == 0
+                || (item["fc"] != nil && intValue(item["fc"]) == 0)
             return FileItem(name: name, pickCode: pc, fileID: fid, cid: cid.isEmpty ? fid : cid, isDir: isDir, size: Int64(doubleValue(item["s"] ?? item["fs"] ?? item["size"])))
         }
     }

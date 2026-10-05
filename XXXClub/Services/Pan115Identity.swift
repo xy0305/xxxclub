@@ -132,6 +132,28 @@ enum Pan115Identity {
             })
     }
 
+    /// Exact full scene folders only; no studio-only or catch-all queries.
+    static func folderQueries(_ title: String) -> [String] {
+        guard let item = release(title) else { return [] }
+        let tail = semanticTokens(item.tail.joined(separator: "."))
+        guard tail.filter({ $0.contains(where: \.isLetter) }).count >= 2 else { return [] }
+        let original = semanticTokens(title).joined(separator: ".")
+        let canonical = ([item.studio, item.date] + tail).joined(separator: ".")
+        var seen = Set<String>()
+        return [original, canonical].filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    static func folderVideo(_ filename: String, title: String) -> Bool {
+        let words = semanticTokens(filename)
+        guard !tokens(filename).contains("sample"), !words.isEmpty else { return false }
+        if release(filename) != nil { return distinguishedName(filename, title: title) }
+        // A trusted scene folder may support actor-only or generic main filenames,
+        // but unknown scene/studio/date information must never be discarded.
+        guard let item = release(title) else { return false }
+        let tail = semanticTokens(item.tail.joined(separator: "."))
+        return words == tail || ["movie", "video", "main"].contains(words.joined())
+    }
+
     static func taskMatches(hash expected: String, taskHash: String, taskURL: String) -> Bool {
         let wanted = hash(expected)
         guard !wanted.isEmpty else { return false }

@@ -88,4 +88,19 @@ for nearMiss in ["byngr.26.10.02.other.actor.4k.mp4", "byngr.26.10.02.zarina.oth
     check(!Pan115Identity.safeStudioHit(nearMiss, title: byngrTitle, manifest: []), "BYNGR strict near miss: \(nearMiss)")
 }
 check([byngrFile + ".mp4", "bangyngr.26.10.02.zarina.noir.1080p.mp4"].filter { Pan115Identity.safeStudioHit($0, title: byngrTitle, manifest: []) }.count == 2, "BYNGR ambiguous qualities remain multiple choices")
+let actualFolder = "Bang.YNGR.26.10.02.Zarina.Noir.XXX.2160p.MP4-WRB[XC]"
+check(Pan115Identity.distinguishedName(actualFolder, title: byngrTitle), "actual full release folder technical suffix")
+check(Pan115Identity.distinguishedName(actualFolder.uppercased(), title: byngrFile), "folder canonical alias punctuation case")
+check(Pan115Identity.folderQueries(byngrTitle) == ["bang.yngr.26.10.02.zarina.noir", "byngr.26.10.02.zarina.noir"], "bounded precise original and canonical queries")
+check(Pan115Identity.folderQueries("").isEmpty, "no empty query catchall")
+check(Pan115Identity.folderQueries("Bang YNGR 26 10 02").isEmpty, "no date-only folder query")
+check(Pan115Identity.folderVideo(byngrFile + ".mp4", title: byngrTitle), "actual folder inner video")
+check(Pan115Identity.folderVideo("zarina.noir.mp4", title: byngrTitle), "trusted folder actor-only abbreviated video")
+check(Pan115Identity.folderVideo("main.mp4", title: byngrTitle), "trusted folder generic main")
+for wrong in ["byngr.26.10.01.zarina.noir.mp4", "byngr.26.10.02.other.actor.mp4", "otherstudio.26.10.02.zarina.noir.mp4", "sample.mp4", "main.sample.mp4", "other.actor.mp4", "26.10.03.mp4"] {
+    check(!Pan115Identity.folderVideo(wrong, title: byngrTitle), "mixed folder conflicting/sample file rejected: \(wrong)")
+    check(!Pan115Identity.distinguishedName(wrong, title: byngrTitle), "wrong folder identity rejected: \(wrong)")
+}
+check([actualFolder, actualFolder.uppercased()].filter { Pan115Identity.distinguishedName($0, title: byngrTitle) }.count == 2, "multiple folder identities preserved")
+check([byngrFile + ".mp4", "zarina.noir.mp4"].filter { Pan115Identity.folderVideo($0, title: byngrTitle) }.count == 2, "multiple compatible videos preserved not largest")
 print("PASS: \(count) production 115 identity regression assertions")

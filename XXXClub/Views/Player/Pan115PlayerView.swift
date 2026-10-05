@@ -270,7 +270,9 @@ final class Pan115PlayerViewModel: ObservableObject {
 
     private func mayAutoplay(_ file: Pan115Client.FileItem, keyword: String, manifest: [String]) -> Bool {
         // Non studio/date results have already passed the strict hash/name fallback.
-        !Pan115Identity.studioDateCandidate(file.name, title: keyword)
+        if file.requiresManualSelection { return false }
+        if file.trustedSceneFolder { return Pan115Identity.folderVideo(file.name, title: keyword) }
+        return !Pan115Identity.studioDateCandidate(file.name, title: keyword)
             || Pan115Identity.safeStudioHit(file.name, title: keyword, manifest: manifest)
     }
 
