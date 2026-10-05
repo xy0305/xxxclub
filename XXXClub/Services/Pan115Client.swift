@@ -187,6 +187,7 @@ public final class Pan115Client: @unchecked Sendable {
         public let name: String
         public let url: String
         public let bandwidth: Int
+        public var isOriginal = false
     }
 
     /// 轮询离线任务直到完成（默认 90 秒）
@@ -519,7 +520,39 @@ public final class Pan115Client: @unchecked Sendable {
         return url
     }
 
+    /// Resolve source file independently of HLS, using this already identity-checked file's pickcode.
+    public func sourceStream(pickCode: String, cookie: String) async throws -> PlayStream {
+        let endpoints = [
+            "https://webapi.115.com/files/download?pickcode=\(pickCode.formEncoded)",
+            "https://115vod.com/webapi/files/video?pickcode=\(pickCode.formEncoded)&local=1",
+            "https://webapi.115.com/files/video?pickcode=\(pickCode.formEncoded)&local=1",
+        ]
+        for endpoint in endpoints {
+            var request = URLRequest(url: URL(string: endpoint)!)
+            appendCommonHeaders(&request, cookie: cookie)
+            if let object = try? await json(for: request) {
+                let payload = object["data"] as? [String: Any] ?? object
+                let download = endpoint.contains("/files/download?")
+                    ? (payload["url"] as? String).flatMap(Pan115PlaybackRouting.directURL) : nil
+                if (object["state"] as? Bool) != false,
+                   let url = Pan115PlaybackRouting.originalURL(object) ?? download {
+                    return PlayStream(name: "原文件（源文件）", url: url.absoluteString, bandwidth: 0, isOriginal: true)
+                }
+            }
+        }
+        throw Pan115Error.playURLNotFound
+    }
+
     public func streamsForVideo(pickCode: String, cookie: String, filename: String) async throws -> [PlayStream] {
+        // Source resolution must not be short-circuited by a successful HLS response.
+        let source = try? await sourceStream(pickCode: pickCode, cookie: cookie)
+        let transcodes = (try? await transcodeStreams(pickCode: pickCode, cookie: cookie, filename: filename)) ?? []
+        let list = (source.map { [$0] } ?? []) + transcodes
+        guard !list.isEmpty else { throw Pan115Error.playURLNotFound }
+        return list
+    }
+
+    private func transcodeStreams(pickCode: String, cookie: String, filename: String) async throws -> [PlayStream] {
         let m3u8URL = URL(string: "https://115.com/api/video/m3u8/\(pickCode.formEncoded).m3u8")!
         var req = URLRequest(url: m3u8URL)
         req.httpMethod = "GET"
@@ -547,7 +580,7 @@ public final class Pan115Client: @unchecked Sendable {
                 let direct = stringValue(obj["download_url"] ?? obj["video_url"] ?? obj["url"]
                     ?? data["download_url"] ?? data["video_url"] ?? data["url"])
                 if direct.hasPrefix("http"), URL(string: direct) != nil {
-                    return [PlayStream(name: "原文件", url: direct, bandwidth: 0)]
+                    return [PlayStream(name: "转码播放", url: direct, bandwidth: 0)]
                 }
             }
         }

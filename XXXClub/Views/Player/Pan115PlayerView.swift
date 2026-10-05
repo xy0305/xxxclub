@@ -15,6 +15,7 @@ struct Pan115PlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = Pan115PlayerViewModel()
     @State private var showEpisodes = false
+    @State private var showQuality = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -26,6 +27,7 @@ struct Pan115PlayerView: View {
                     subtitle: vm.qualityLabel,
                     headers: vm.headers
                 )
+                .id(url.absoluteString)
             } else if let err = vm.errorMessage {
                 ContentUnavailableView {
                     Label("无法播放", systemImage: "exclamationmark.triangle")
@@ -50,6 +52,15 @@ struct Pan115PlayerView: View {
                     Button("取消") { dismiss() }
                         .foregroundStyle(.white)
                 }
+            }
+
+            if vm.playURL != nil, vm.streams.count > 1 {
+                Button(vm.qualityLabel + " ▾") { showQuality = true }
+                    .foregroundStyle(.white)
+                    .padding(12)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .padding(.leading, 60)
+                    .padding(.top, 12)
             }
 
             if vm.episodes.count > 1 {
@@ -83,6 +94,14 @@ struct Pan115PlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
         .task { await vm.start(movie: movie, magnetURL: magnetURL, manifest: manifest) }
+        .confirmationDialog("播放质量 / 源文件", isPresented: $showQuality) {
+            ForEach(Array(vm.streams.enumerated()), id: \.offset) { _, stream in
+                Button(stream.name) { vm.select(stream) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("原文件为下载直链；若编码不兼容或播放失败，请切换转码质量。切换将重新开始播放。")
+        }
         .confirmationDialog("选择集数", isPresented: $showEpisodes) {
             ForEach(Array(vm.episodes.enumerated()), id: \.element.fileID) { index, file in
                 Button(file.name) {
@@ -122,7 +141,9 @@ final class Pan115PlayerViewModel: ObservableObject {
     @Published var qualityLabel = "原画"
 
     var headers: [String: String] {
-        Pan115Client.playHeaders(cookie: Pan115Settings.shared.cookie)
+        guard let url = playURL else { return [:] }
+        return Pan115PlaybackRouting.headers(url: url,
+            common: Pan115Client.playHeaders(cookie: Pan115Settings.shared.cookie))
     }
 
     func start(movie: XCTorrent, magnetURL: String?, manifest: [String]) async {

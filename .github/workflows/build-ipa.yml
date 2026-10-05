@@ -44,6 +44,12 @@ jobs:
           swiftc XXXClub/Services/Pan115Identity.swift Tests/Pan115Regression/main.swift -o /tmp/xc-115-tests
           /tmp/xc-115-tests
 
+      - name: Run production Swift 115 playback routing tests
+        run: |
+          set -euo pipefail
+          swiftc XXXClub/Services/Pan115PlaybackRouting.swift Tests/Pan115PlaybackRegression/main.swift -o /tmp/xc-playback-tests
+          /tmp/xc-playback-tests
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail
