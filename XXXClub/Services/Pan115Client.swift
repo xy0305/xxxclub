@@ -291,11 +291,12 @@ public final class Pan115Client: @unchecked Sendable {
     public func searchFiles(keyword: String, cookie: String, limit: Int = 30) async throws -> [FileItem] {
         let kw = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         let encoded = (kw.isEmpty ? ".mp4" : kw).formEncoded
+        // Live read-only tests: web search returns the requested scene; Android search
+        // can return unrelated first-page rows. aps files.php is a listing, not search.
         let urls = [
-            "https://proapi.115.com/android/2.0/ufile/search?search_value=\(encoded)&limit=\(limit)&offset=0&type=4&format=json",
-            "https://aps.115.com/natsort/files.php?search_value=\(encoded)&type=4&limit=\(limit)&offset=0&format=json",
             "https://webapi.115.com/files/search?search_value=\(encoded)&limit=\(limit)&offset=0&type=4&format=json",
             "https://webapi.115.com/files/search?search_value=\(encoded)&limit=\(limit)&offset=0&format=json",
+            "https://proapi.115.com/android/2.0/ufile/search?search_value=\(encoded)&limit=\(limit)&offset=0&type=4&format=json",
         ]
         var lastError: Error = Pan115Error.fileNotFound
         for u in urls {
@@ -303,12 +304,14 @@ public final class Pan115Client: @unchecked Sendable {
             guard let url = URL(string: u) else { continue }
             var req = URLRequest(url: url)
             req.httpMethod = "GET"
+            req.timeoutInterval = 8
             appendCommonHeaders(&req, cookie: cookie)
             do {
-                let obj = try await json(for: req, retries: 1)
+                let obj = try await json(for: req, retries: 0)
                 let files = extractFileList(obj)
                 if !files.isEmpty { return files }
-                if boolState(obj["state"]) { return [] }
+                // A typed search can omit an unclassified video; try untyped next.
+                if boolState(obj["state"]) && !u.contains("type=4") { return [] }
             } catch {
                 lastError = error
             }
@@ -322,13 +325,20 @@ public final class Pan115Client: @unchecked Sendable {
         manifest: [String] = []
     ) async throws -> [FileItem] {
         var studioHits: [FileItem] = []
-        for query in Pan115Identity.studioDateQueries(keyword) {
+        let compact = Pan115Identity.semanticTokens(keyword).joined(separator: ".")
+        let queries = Array(([compact] + Pan115Identity.studioDateQueries(keyword)).prefix(5))
+        for query in queries {
             try Task.checkCancellation()
             let files = (try? await searchFiles(keyword: query, cookie: cookie, limit: 100)) ?? []
             studioHits.append(contentsOf: files.filter {
                 !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty
                     && Pan115Identity.studioDateCandidate($0.name, title: keyword)
             })
+            // Keep all qualities in this response for the existing manual chooser.
+            let proven = studioHits.uniquedFiles.filter {
+                Pan115Identity.safeStudioHit($0.name, title: keyword, manifest: manifest)
+            }
+            if !proven.isEmpty { return proven }
         }
         let candidates = studioHits.uniquedFiles
         if !candidates.isEmpty {

@@ -50,4 +50,14 @@ let ambiguous = ["NA.24.05.01.Alice.Bob.1080p.mp4", "NA.24.05.01.Alice.Bob.2160p
 check(ambiguous.filter { Pan115Identity.safeStudioHit($0, title: "NaughtyAmerica.24.05.01.Alice.Bob", manifest: []) }.count == 2, "multiple valid identities preserved for manual chooser")
 check(Pan115Identity.studioDateQueries("NaughtyAmerica.24.05.01.Alice.Bob").first == "naughtyamerica.24.05.01", "full studio date search first")
 check(Pan115Identity.studioDateQueries("NaughtyAmerica.24.05.01.Alice.Bob").contains("na.24.05.01"), "known abbreviation searched")
+let tushyTitle = "Tushy 26 10 04 Megan Longoria And Mary Rock Gorgeous Duo Anal Threesome XXX 2160p MP4-P2P [XC]"
+let tushyFile = "tushy.26.10.04.megan.longoria.and.mary.rock.gorgeous.duo.anal.threesome.xxx"
+check(Pan115Identity.strictName(tushyFile, title: tushyTitle), "user exact extensionless sample")
+check(Pan115Identity.safeStudioHit(tushyFile + ".mp4", title: tushyTitle, manifest: []), "live 11.27GB video identity")
+check(Pan115Identity.safeStudioHit(tushyFile, title: tushyTitle, manifest: ["unrelated.mp4"]), "strong scene identity independent of unrelated manifest")
+check(!Pan115Identity.safeStudioHit(tushyFile.replacingOccurrences(of: "mary.rock", with: "other.actor"), title: tushyTitle, manifest: []), "same release different actors")
+check(!Pan115Identity.safeStudioHit(tushyFile.replacingOccurrences(of: "gorgeous.duo", with: "different.scene"), title: tushyTitle, manifest: []), "same actors different scene")
+check(!Pan115Identity.safeStudioHit(tushyFile + ".sample.mp4", title: tushyTitle, manifest: []), "sample cannot be stripped as metadata")
+check(!Pan115Identity.safeStudioHit("tushy.26.10.04.mp4", title: tushyTitle, manifest: []), "date alone never autoplay")
+check(Pan115Identity.semanticTokens(tushyTitle).joined(separator: ".") == String(tushyFile.dropLast(4)), "clean compact distinctive query")
 print("PASS: \(count) production 115 identity regression assertions")

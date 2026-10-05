@@ -19,10 +19,17 @@ enum Pan115Identity {
         raw.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
     }
 
+    /// Strip only recognized trailing release metadata; never remove actor/scene words.
+    static func semanticTokens(_ raw: String) -> [String] {
+        var result = tokens((raw as NSString).lastPathComponent)
+        let technical: Set<String> = ["mp4", "mkv", "avi", "mov", "wmv", "1080p", "720p", "2160p", "4k", "h264", "h265", "x264", "x265", "hevc", "aac", "web", "dl", "c", "restored", "p2p", "xc", "xxx"]
+        while let last = result.last, technical.contains(last) { result.removeLast() }
+        return result
+    }
+
     static func strictName(_ filename: String, title: String) -> Bool {
-        let base = (filename as NSString).lastPathComponent
-        let name = tokens((base as NSString).deletingPathExtension)
-        let key = tokens(title)
+        let name = semanticTokens(filename)
+        let key = semanticTokens(title)
         // A studio, date, or short generic label is not an identity.
         let letters = key.filter { $0.contains(where: \.isLetter) }
         let code = key.count == 2 && letters.count == 1 && key[1].allSatisfy(\.isNumber) && key[1].count >= 3
@@ -98,11 +105,11 @@ enum Pan115Identity {
     static func distinguishedName(_ filename: String, title: String) -> Bool {
         if strictName(filename, title: title) { return true }
         guard studioDateCandidate(filename, title: title), let a = release(title),
-              let b = release(((filename as NSString).lastPathComponent as NSString).deletingPathExtension) else { return false }
-        let quality: Set<String> = ["1080p", "720p", "2160p", "4k", "h264", "h265", "x264", "x265", "hevc", "aac", "web", "dl", "c", "restored"]
-        guard a.tail.filter({ $0.contains(where: \.isLetter) && !quality.contains($0) }).count >= 2,
-              b.tail.count >= a.tail.count, Array(b.tail.prefix(a.tail.count)) == a.tail else { return false }
-        return b.tail.dropFirst(a.tail.count).allSatisfy { quality.contains($0) }
+              let b = release(filename) else { return false }
+        let key = semanticTokens(a.tail.joined(separator: "."))
+        let name = semanticTokens(b.tail.joined(separator: "."))
+        guard key.filter({ $0.contains(where: \.isLetter) }).count >= 2 else { return false }
+        return name == key
     }
 
     static func safeStudioHit(_ filename: String, title: String, manifest: [String]) -> Bool {
