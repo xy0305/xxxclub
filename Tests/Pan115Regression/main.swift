@@ -73,4 +73,19 @@ for nearMiss in ["shesinmybed.26.10.04.xena.dream.4k.mp4", "shesinmybed.26.10.05
 }
 check(Pan115Identity.semanticTokens("Studio.26.10.05.Wrb.Actor.4k.mp4").contains("wrb"), "standalone WRB actor retained")
 check(Pan115Identity.semanticTokens("Studio.26.10.05.Xxx.Actor.4k.mp4").contains("xxx"), "internal technical-looking semantic word retained")
+let byngrTitle = "Bang YNGR 26 10 02 Zarina Noir XXX 2160p MP4-WRB [XC]"
+let byngrFile = "byngr.26.10.02.zarina.noir.4k"
+check(Pan115Identity.release(byngrTitle)?.studio == "byngr", "multiword Bang YNGR canonical studio")
+check(Pan115Identity.release(byngrTitle)?.date == "26.10.02", "release October 2 not site added October 3")
+check(Pan115Identity.release("BangYNGR 26 10 02 Zarina Noir")?.studio == "byngr", "joined BangYNGR alias")
+check(Pan115Identity.safeStudioHit(byngrFile, title: byngrTitle, manifest: []), "exact extensionless BYNGR user sample")
+check(Pan115Identity.safeStudioHit(byngrFile + ".mp4", title: byngrTitle, manifest: []), "verified 6148202939 byte BYNGR video")
+let byngrQueries = Pan115Identity.studioDateQueries(byngrTitle)
+check(byngrQueries.first == "byngr.26.10.02", "canonical alias query first within production five-query cap")
+check(byngrQueries.contains("bangyngr.26.10.02") && byngrQueries.contains("bang.yngr.26.10.02"), "explicit joined and separated studio search aliases")
+check(Pan115Identity.studioDateQueries(byngrFile).contains("bangyngr.26.10.02"), "filename and detail use same alias expansion")
+for nearMiss in ["byngr.26.10.02.other.actor.4k.mp4", "byngr.26.10.02.zarina.other.4k.mp4", "byngr.26.10.03.zarina.noir.4k.mp4", "byngr.26.10.01.zarina.noir.4k.mp4", "byngr.26.10.02.zarina.noir.sample.4k.mp4", "byngr.26.10.02.zarina.noir.other.scene.4k.mp4", "byngr.26.10.02.4k.mp4", "byn.26.10.02.zarina.noir.4k.mp4"] {
+    check(!Pan115Identity.safeStudioHit(nearMiss, title: byngrTitle, manifest: []), "BYNGR strict near miss: \(nearMiss)")
+}
+check([byngrFile + ".mp4", "bangyngr.26.10.02.zarina.noir.1080p.mp4"].filter { Pan115Identity.safeStudioHit($0, title: byngrTitle, manifest: []) }.count == 2, "BYNGR ambiguous qualities remain multiple choices")
 print("PASS: \(count) production 115 identity regression assertions")

@@ -62,6 +62,9 @@ enum Pan115Identity {
     }
 
     private static let aliases: [String: [String]] = [
+        // Verified release label Bang YNGR / BangYNGR uses BYNGR filenames.
+        // Explicit aliases only: never infer arbitrary studio initials.
+        "byngr": ["byngr", "bangyngr", "bang.yngr"],
         "brazzers": ["brazzers", "braz", "bz"],
         "pornmegaload": ["pornmegaload", "pml"],
         "naughtyamerica": ["naughtyamerica", "na"],
