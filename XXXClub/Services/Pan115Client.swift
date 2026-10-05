@@ -328,7 +328,9 @@ public final class Pan115Client: @unchecked Sendable {
         let queries = Pan115Identity.folderQueries(keyword)
         guard !queries.isEmpty else { return nil }
         var folders: [FileItem] = []
+        var complete = true
         for query in queries {
+            var pagination = Pan115Identity.FolderSearchState()
             for page in 0..<3 {
                 try Task.checkCancellation()
                 let url = URL(string: "https://webapi.115.com/files/search?search_value=\(query.formEncoded)&type=0&show_dir=1&limit=100&offset=\(page * 100)&format=json")!
@@ -342,18 +344,19 @@ public final class Pan115Client: @unchecked Sendable {
                     $0.isDir && !$0.cid.isEmpty
                         && Pan115Identity.distinguishedName($0.name, title: keyword)
                 })
-                let count = intValue(object["count"])
-                if page == 2 && count > 300 { throw Pan115Error.api("目录搜索结果超出安全分页范围，请使用更精确的标题") }
-                if count > 0 ? (page + 1) * 100 >= count : rows.count < 100 { break }
+                if !pagination.page(index: page, reportedTotal: intValue(object["count"]),
+                                    rowKeys: rows.map { $0.isDir ? "d:" + $0.cid : "f:" + $0.fileID }) { break }
             }
+            complete = complete && pagination.complete
         }
         var seen = Set<String>()
         folders = folders.filter { seen.insert($0.cid).inserted }
         guard !folders.isEmpty else { return nil }
         // Never fan out to a disk scan, or silently omit ambiguous matched folders.
-        guard folders.count <= 8 else { throw Pan115Error.api("精确匹配目录过多，请在 115 中核对重复目录") }
+        guard folders.count <= 8 else { return nil }
         var videos: [FileItem] = []
         for folder in folders {
+            var pagination = Pan115Identity.FolderSearchState()
             for page in 0..<3 {
                 try Task.checkCancellation()
                 let url = URL(string: "https://webapi.115.com/files?cid=\(folder.cid.formEncoded)&show_dir=1&limit=100&offset=\(page * 100)&format=json")!
@@ -372,13 +375,20 @@ public final class Pan115Client: @unchecked Sendable {
                     item.requiresManualSelection = folders.count > 1
                     return item
                 })
-                let count = intValue(object["count"])
-                if count > 0 ? (page + 1) * 100 >= count : rows.count < 100 { break }
-                if page == 2 { throw Pan115Error.api("匹配目录文件过多，无法完整核对，请手动整理") }
+                if !pagination.page(index: page, reportedTotal: intValue(object["count"]),
+                                    rowKeys: rows.map { $0.isDir ? "d:" + $0.cid : "f:" + $0.fileID }) { break }
             }
+            complete = complete && pagination.complete
         }
-        guard !videos.isEmpty else { throw Pan115Error.api("已匹配发行目录，但没有兼容的主视频；不会改选其他目录") }
-        return videos.uniquedFiles
+        let result = videos.uniquedFiles
+        let decision = Pan115Identity.FolderSearchState.disposition(folderCount: folders.count,
+                                                                  videoCount: result.count, complete: complete)
+        guard !decision.fallback else { return nil }
+        return result.map { file in
+            var item = file
+            item.requiresManualSelection = decision.manual
+            return item
+        }
     }
 
     /// Studio + RELEASE date selects candidates first, never proves playback identity.
@@ -386,7 +396,14 @@ public final class Pan115Client: @unchecked Sendable {
         keyword: String, infoHash: String, cookie: String, folderCID: String,
         manifest: [String] = []
     ) async throws -> [FileItem] {
-        if let videos = try await sceneFolderVideos(keyword: keyword, cookie: cookie) { return videos }
+        do {
+            if let videos = try await sceneFolderVideos(keyword: keyword, cookie: cookie) { return videos }
+        } catch {
+            // Directory discovery is optional; cancellation must never become fallback.
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+        }
+        try Task.checkCancellation()
         var studioHits: [FileItem] = []
         let compact = Pan115Identity.semanticTokens(keyword).joined(separator: ".")
         let sceneQueries = Array(([compact] + Pan115Identity.studioDateQueries(keyword)).prefix(5))

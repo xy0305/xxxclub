@@ -143,6 +143,29 @@ enum Pan115Identity {
         return [original, canonical].filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
+    /// Conservative pagination proof: reported totals are not unique row counts.
+    struct FolderSearchState {
+        private(set) var complete = false
+        private(set) var inconsistent = false
+        private var total: Int?
+        private var seen = Set<String>()
+        mutating func page(index: Int, reportedTotal: Int, rowKeys: [String]) -> Bool {
+            if let previous = total, previous != reportedTotal { inconsistent = true }
+            total = reportedTotal
+            for key in rowKeys {
+                if key.isEmpty || !seen.insert(key).inserted { inconsistent = true }
+            }
+            // Short pages can occur before count is exhausted. Do not use row count
+            // as an end condition when the server reports a positive total.
+            let ended = reportedTotal > 0 ? (index + 1) * 100 >= reportedTotal : rowKeys.count < 100
+            if ended && !inconsistent && (reportedTotal <= 0 || seen.count == reportedTotal) { complete = true }
+            return !ended && index < 2
+        }
+        static func disposition(folderCount: Int, videoCount: Int, complete: Bool) -> (fallback: Bool, manual: Bool) {
+            (folderCount == 0 || folderCount > 8 || videoCount == 0, !complete || folderCount > 1)
+        }
+    }
+
     static func folderVideo(_ filename: String, title: String) -> Bool {
         let words = semanticTokens(filename)
         guard !tokens(filename).contains("sample"), !words.isEmpty else { return false }
