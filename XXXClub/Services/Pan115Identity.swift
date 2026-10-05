@@ -39,6 +39,81 @@ enum Pan115Identity {
         return matches.count == 1
     }
 
+    // RELEASE date is parsed only from the resource title; no site added-date input exists.
+    struct Release {
+        let studio: String
+        let date: String
+        let tail: [String]
+    }
+
+    private static let aliases: [String: [String]] = [
+        "brazzers": ["brazzers", "braz", "bz"],
+        "pornmegaload": ["pornmegaload", "pml"],
+        "naughtyamerica": ["naughtyamerica", "na"],
+        "realitykings": ["realitykings", "rk"],
+        "teamskeet": ["teamskeet", "ts"],
+        "blacked": ["blacked", "blk"],
+        "blackedraw": ["blackedraw", "br"],
+        "tushy": ["tushy"], "tushyraw": ["tushyraw", "tr"],
+        "vixen": ["vixen", "vx"], "deeper": ["deeper"]
+    ]
+
+    static func release(_ title: String) -> Release? {
+        guard let regex = try? NSRegularExpression(pattern: #"(?<!\d)(\d{4}|\d{2})[.\s_/-](\d{2})[.\s_/-](\d{2})(?!\d)"#),
+              let match = regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
+              let range = Range(match.range, in: title) else { return nil }
+        let values = (1...3).compactMap { index -> Int? in
+            guard let r = Range(match.range(at: index), in: title) else { return nil }
+            return Int(title[r])
+        }
+        guard values.count == 3 else { return nil }
+        let year = values[0] < 100 ? 2000 + values[0] : values[0]
+        guard (2000...2099).contains(year) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let parts = DateComponents(year: year, month: values[1], day: values[2])
+        guard let date = calendar.date(from: parts),
+              calendar.component(.month, from: date) == values[1],
+              calendar.component(.day, from: date) == values[2] else { return nil }
+        let prefix = tokens(String(title[..<range.lowerBound])).joined()
+        guard !prefix.isEmpty, prefix.allSatisfy(\.isLetter) else { return nil }
+        let studio = aliases.first { $0.value.contains(prefix) }?.key ?? prefix
+        return Release(studio: studio, date: String(format: "%02d.%02d.%02d", year % 100, values[1], values[2]),
+                       tail: tokens(String(title[range.upperBound...])))
+    }
+
+    static func studioDateQueries(_ title: String) -> [String] {
+        guard let item = release(title) else { return [] }
+        let names = aliases[item.studio] ?? [item.studio]
+        // Studio-only queries cover punctuation and four-digit-year naming variants;
+        // every response is subsequently filtered by the normalized RELEASE date.
+        return names.map { "\($0).\(item.date)" } + names
+    }
+
+    static func studioDateCandidate(_ filename: String, title: String) -> Bool {
+        guard let a = release(title), let b = release(filename) else { return false }
+        return a.studio == b.studio && a.date == b.date
+    }
+
+    static func distinguishedName(_ filename: String, title: String) -> Bool {
+        if strictName(filename, title: title) { return true }
+        guard studioDateCandidate(filename, title: title), let a = release(title),
+              let b = release(((filename as NSString).lastPathComponent as NSString).deletingPathExtension) else { return false }
+        let quality: Set<String> = ["1080p", "720p", "2160p", "4k", "h264", "h265", "x264", "x265", "hevc", "aac", "web", "dl", "c", "restored"]
+        guard a.tail.filter({ $0.contains(where: \.isLetter) && !quality.contains($0) }).count >= 2,
+              b.tail.count >= a.tail.count, Array(b.tail.prefix(a.tail.count)) == a.tail else { return false }
+        return b.tail.dropFirst(a.tail.count).allSatisfy { quality.contains($0) }
+    }
+
+    static func safeStudioHit(_ filename: String, title: String, manifest: [String]) -> Bool {
+        guard studioDateCandidate(filename, title: title) else { return false }
+        return distinguishedName(filename, title: title)
+            || (manifestMatch(filename, manifest: manifest) && manifest.contains {
+                ($0 as NSString).lastPathComponent.lowercased() == (filename as NSString).lastPathComponent.lowercased()
+                    && distinguishedName($0, title: title)
+            })
+    }
+
     static func taskMatches(hash expected: String, taskHash: String, taskURL: String) -> Bool {
         let wanted = hash(expected)
         guard !wanted.isEmpty else { return false }

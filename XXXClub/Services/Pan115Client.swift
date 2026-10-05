@@ -260,6 +260,7 @@ public final class Pan115Client: @unchecked Sendable {
         ]
         var lastError: Error = Pan115Error.fileNotFound
         for u in urls {
+            try Task.checkCancellation()
             guard let url = URL(string: u) else { continue }
             var req = URLRequest(url: url)
             req.httpMethod = "GET"
@@ -298,6 +299,7 @@ public final class Pan115Client: @unchecked Sendable {
         ]
         var lastError: Error = Pan115Error.fileNotFound
         for u in urls {
+            try Task.checkCancellation()
             guard let url = URL(string: u) else { continue }
             var req = URLRequest(url: url)
             req.httpMethod = "GET"
@@ -314,11 +316,26 @@ public final class Pan115Client: @unchecked Sendable {
         throw lastError
     }
 
-    /// Search results are candidates only; hash-bound task output and manifest take priority.
+    /// Studio + RELEASE date selects candidates first, never proves playback identity.
     public func findPlayable(
         keyword: String, infoHash: String, cookie: String, folderCID: String,
         manifest: [String] = []
     ) async throws -> [FileItem] {
+        var studioHits: [FileItem] = []
+        for query in Pan115Identity.studioDateQueries(keyword) {
+            try Task.checkCancellation()
+            let files = (try? await searchFiles(keyword: query, cookie: cookie, limit: 100)) ?? []
+            studioHits.append(contentsOf: files.filter {
+                !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty
+                    && Pan115Identity.studioDateCandidate($0.name, title: keyword)
+            })
+        }
+        let candidates = studioHits.uniquedFiles
+        if !candidates.isEmpty {
+            let identified = candidates.filter { Pan115Identity.safeStudioHit($0.name, title: keyword, manifest: manifest) }
+            return identified.isEmpty ? candidates : identified
+        }
+        try Task.checkCancellation()
         let hash = Pan115Identity.hash(infoHash)
         if !hash.isEmpty {
             let tasks = try await listOfflineTasks(cookie: cookie)
@@ -1004,6 +1021,7 @@ public final class Pan115Client: @unchecked Sendable {
                 }
                 return obj
             } catch {
+                try Task.checkCancellation()
                 lastErr = error
                 if attempt < retries {
                     try? await Task.sleep(nanoseconds: 400_000_000 * UInt64(attempt + 1))

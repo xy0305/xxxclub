@@ -167,12 +167,15 @@ final class Pan115PlayerViewModel: ObservableObject {
 
         do {
             status = "正在 115 中搜索 \(keyword)…"
-            if let existing = try? await Pan115Client.shared.findPlayable(
-                keyword: keyword, infoHash: hash, cookie: cookie, folderCID: cid, manifest: manifest
-            ), !existing.isEmpty {
+            let existing: [Pan115Client.FileItem]
+            do {
+                existing = try await verify(keyword: keyword, infoHash: hash, cookie: cookie,
+                    folderCID: cid, manifest: manifest)
+            } catch Pan115Error.fileNotFound { existing = [] }
+            if !existing.isEmpty {
                 episodes = existing
-                guard existing.count == 1 else {
-                    throw Pan115Error.api("匹配到多个文件，请关闭提示后选择文件；不会自动播放")
+                guard existing.count == 1, mayAutoplay(existing[0], keyword: keyword, manifest: manifest) else {
+                    throw Pan115Error.api("候选文件尚未唯一确认身份，请关闭提示后手动选择文件；不会自动播放")
                 }
                 try await play(file: existing[0], cookie: cookie)
                 return
@@ -199,7 +202,9 @@ final class Pan115PlayerViewModel: ObservableObject {
                 keyword: keyword, infoHash: hash, cookie: cookie, folderCID: cid, manifest: manifest,
                 timeout: result == .exists ? 60 : 180)
             episodes = files
-            guard files.count == 1 else { throw Pan115Error.api("匹配到多个文件，请选择文件；不会自动播放") }
+            guard files.count == 1, mayAutoplay(files[0], keyword: keyword, manifest: manifest) else {
+                throw Pan115Error.api("候选文件尚未唯一确认身份，请手动选择文件；不会自动播放")
+            }
             try await play(file: files[0], cookie: cookie)
         } catch {
             errorMessage = error.localizedDescription
@@ -224,6 +229,32 @@ final class Pan115PlayerViewModel: ObservableObject {
         isLoading = false
     }
 
+    /// Total verification budget includes network requests, not just polling sleeps.
+    private func verify(
+        keyword: String, infoHash: String, cookie: String, folderCID: String,
+        manifest: [String], timeout: TimeInterval = 35
+    ) async throws -> [Pan115Client.FileItem] {
+        try await withThrowingTaskGroup(of: [Pan115Client.FileItem].self) { group in
+            group.addTask {
+                try await Pan115Client.shared.findPlayable(keyword: keyword, infoHash: infoHash,
+                    cookie: cookie, folderCID: folderCID, manifest: manifest)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                throw Pan115Error.timeout
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw Pan115Error.fileNotFound }
+            return result
+        }
+    }
+
+    private func mayAutoplay(_ file: Pan115Client.FileItem, keyword: String, manifest: [String]) -> Bool {
+        // Non studio/date results have already passed the strict hash/name fallback.
+        !Pan115Identity.studioDateCandidate(file.name, title: keyword)
+            || Pan115Identity.safeStudioHit(file.name, title: keyword, manifest: manifest)
+    }
+
     private func waitUntilPlayable(
         keyword: String, infoHash: String, cookie: String, folderCID: String,
         manifest: [String], timeout: TimeInterval
@@ -231,19 +262,15 @@ final class Pan115PlayerViewModel: ObservableObject {
         guard !Pan115Identity.hash(infoHash).isEmpty else { throw Pan115Error.fileNotFound }
         let start = Date()
         while Date().timeIntervalSince(start) < timeout {
-            if let files = try? await Pan115Client.shared.findPlayable(
-                keyword: keyword, infoHash: infoHash, cookie: cookie,
-                folderCID: folderCID, manifest: manifest
-            ), !files.isEmpty { return files }
-            let tasks = try await Pan115Client.shared.listOfflineTasks(cookie: cookie)
-            let exact = tasks.filter {
-                Pan115Identity.taskMatches(hash: infoHash, taskHash: $0.infoHash, taskURL: $0.url)
-            }
-            guard exact.count <= 1 else { throw Pan115Error.fileNotFound }
-            if let hit = exact.first {
-                if hit.isFailed { throw Pan115Error.taskFailed(hit.name) }
-                status = hit.isRunning ? "离线中 \(Int(hit.percent))%…" : "正在核对当前种子文件…"
-            } else { status = "正在核对当前种子文件…" }
+            do {
+                let remaining = timeout - Date().timeIntervalSince(start)
+                let files = try await verify(keyword: keyword, infoHash: infoHash, cookie: cookie,
+                    folderCID: folderCID, manifest: manifest, timeout: min(35, remaining))
+                if !files.isEmpty { return files }
+            } catch Pan115Error.fileNotFound { }
+            if Date().timeIntervalSince(start) >= timeout { throw Pan115Error.timeout }
+            let remaining = max(0, Int(timeout - Date().timeIntervalSince(start)))
+            status = "正在按厂牌发行日期及文件身份核对（剩余 \(remaining) 秒）…"
             try await Task.sleep(nanoseconds: 2_000_000_000)
         }
         throw Pan115Error.timeout
