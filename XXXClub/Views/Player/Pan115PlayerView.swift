@@ -25,7 +25,8 @@ struct Pan115PlayerView: View {
                     url: url,
                     title: movie.title,
                     subtitle: vm.qualityLabel,
-                    headers: vm.headers
+                    headers: vm.headers,
+                    onQualitySelection: vm.streams.count > 1 ? { showQuality = true } : nil
                 )
                 .id(url.absoluteString)
             } else if let err = vm.errorMessage {
@@ -52,15 +53,6 @@ struct Pan115PlayerView: View {
                     Button("取消") { dismiss() }
                         .foregroundStyle(.white)
                 }
-            }
-
-            if vm.playURL != nil, vm.streams.count > 1 {
-                Button(vm.qualityLabel + " ▾") { showQuality = true }
-                    .foregroundStyle(.white)
-                    .padding(12)
-                    .background(.black.opacity(0.6), in: Capsule())
-                    .padding(.leading, 60)
-                    .padding(.top, 12)
             }
 
             if vm.episodes.count > 1 {
@@ -138,7 +130,7 @@ final class Pan115PlayerViewModel: ObservableObject {
     @Published var episodes: [Pan115Client.FileItem] = []
     @Published var playURL: URL?
     @Published var streams: [Pan115Client.PlayStream] = []
-    @Published var qualityLabel = "原画"
+    @Published var qualityLabel = "等待选流"
 
     var headers: [String: String] {
         guard let url = playURL else { return [:] }

@@ -22,8 +22,16 @@ enum Pan115Identity {
     /// Strip only recognized trailing release metadata; never remove actor/scene words.
     static func semanticTokens(_ raw: String) -> [String] {
         var result = tokens((raw as NSString).lastPathComponent)
-        let technical: Set<String> = ["mp4", "mkv", "avi", "mov", "wmv", "1080p", "720p", "2160p", "4k", "h264", "h265", "x264", "x265", "hevc", "aac", "web", "dl", "c", "restored", "p2p", "xc", "xxx"]
-        while let last = result.last, technical.contains(last) { result.removeLast() }
+        let technical: Set<String> = ["mp4", "mkv", "avi", "mov", "wmv", "480p", "576p", "720p", "1080p", "1440p", "2160p", "4320p", "4k", "8k", "uhd", "fhd", "h264", "h265", "x264", "x265", "hevc", "aac", "web", "dl", "c", "restored", "p2p", "xc", "xxx"]
+        while let last = result.last {
+            if technical.contains(last) { result.removeLast(); continue }
+            // WRB is release metadata only in the explicit MP4-WRB suffix.
+            // Do not globally remove possible actor or scene words.
+            if last == "wrb", result.dropLast().last == "mp4" {
+                result.removeLast(2); continue
+            }
+            break
+        }
         return result
     }
 

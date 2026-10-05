@@ -17,6 +17,7 @@ struct KSChromePlayer: View {
     var title: String = ""
     var subtitle: String = ""
     var headers: [String: String] = [:]
+    var onQualitySelection: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var coordinator = KSVideoPlayer.Coordinator()
@@ -298,9 +299,16 @@ struct KSChromePlayer: View {
                 Spacer()
 
                 if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
+                    if let onQualitySelection {
+                        Button(subtitle + " ▾") { onQualitySelection() }
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white)
+                            .accessibilityLabel("播放质量 / 源文件：" + subtitle)
+                    } else {
+                        Text(subtitle)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white)
+                    }
                 }
             }
             .padding(.horizontal, 16)

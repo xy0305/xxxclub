@@ -590,7 +590,7 @@ public final class Pan115Client: @unchecked Sendable {
             let parsed = parseMaster(text)
             if !parsed.isEmpty { return parsed }
             if !text.contains("#EXT-X-STREAM-INF") {
-                return [PlayStream(name: "原画", url: m3u8URL.absoluteString, bandwidth: 0)]
+                return [PlayStream(name: "转码 HLS（清晰度未知）", url: m3u8URL.absoluteString, bandwidth: 0)]
             }
         }
         let candidates = [
@@ -951,7 +951,7 @@ public final class Pan115Client: @unchecked Sendable {
                 let name = capture(line, #"NAME="([^"]+)""#)
                 let height = Int(capture(line, #"RESOLUTION=\d+x(\d+)"#) ?? "") ?? 0
                 let bw = Int(capture(line, #"BANDWIDTH=(\d+)"#) ?? "") ?? 0
-                let label = qualityLabel(name: name, height: height, bandwidth: bw)
+                let label = "转码 · " + qualityLabel(name: name, height: height, bandwidth: bw)
                 if i + 1 < lines.count {
                     var u = lines[i + 1]
                     if u.hasPrefix("https: //") { u = u.replacingOccurrences(of: "https: //", with: "https://") }

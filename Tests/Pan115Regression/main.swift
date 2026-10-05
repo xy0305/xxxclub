@@ -60,4 +60,17 @@ check(!Pan115Identity.safeStudioHit(tushyFile.replacingOccurrences(of: "gorgeous
 check(!Pan115Identity.safeStudioHit(tushyFile + ".sample.mp4", title: tushyTitle, manifest: []), "sample cannot be stripped as metadata")
 check(!Pan115Identity.safeStudioHit("tushy.26.10.04.mp4", title: tushyTitle, manifest: []), "date alone never autoplay")
 check(Pan115Identity.semanticTokens(tushyTitle).joined(separator: ".") == String(tushyFile.dropLast(4)), "clean compact distinctive query")
+let xenaTitle = "ShesInMyBed 26 10 05 Xena Dream XXX 2160p MP4-WRB [XC]"
+let xenaFile = "shesinmybed.26.10.05.xena.dream.4k"
+check(Pan115Identity.semanticTokens(xenaTitle) == Pan115Identity.semanticTokens(xenaFile), "WRB suffix and 4K alias normalize actual sample")
+check(Pan115Identity.strictName(xenaFile, title: xenaTitle), "actual extensionless Xena file")
+check(Pan115Identity.safeStudioHit(xenaFile + ".mp4", title: xenaTitle, manifest: []), "actual 2876197049 byte Xena video")
+for quality in ["4k", "2160p", "1080p", "720p", "480p", "1440p", "uhd", "fhd", "8k", "4320p"] {
+    check(Pan115Identity.safeStudioHit("shesinmybed.26.10.05.xena.dream.\(quality).mp4", title: xenaTitle, manifest: []), "resolution suffix \(quality)")
+}
+for nearMiss in ["shesinmybed.26.10.04.xena.dream.4k.mp4", "shesinmybed.26.10.05.other.actor.4k.mp4", "shesinmybed.26.10.05.xena.other.4k.mp4", "shesinmybed.26.10.05.xena.dream.sample.4k.mp4", "shesinmybed.26.10.05.4k.mp4", "shesinmybed.26.10.05.xena.dream.other.scene.4k.mp4"] {
+    check(!Pan115Identity.safeStudioHit(nearMiss, title: xenaTitle, manifest: []), "Xena near miss rejected: \(nearMiss)")
+}
+check(Pan115Identity.semanticTokens("Studio.26.10.05.Wrb.Actor.4k.mp4").contains("wrb"), "standalone WRB actor retained")
+check(Pan115Identity.semanticTokens("Studio.26.10.05.Xxx.Actor.4k.mp4").contains("xxx"), "internal technical-looking semantic word retained")
 print("PASS: \(count) production 115 identity regression assertions")
