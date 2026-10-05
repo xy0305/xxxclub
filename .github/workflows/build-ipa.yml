@@ -38,6 +38,12 @@ jobs:
           swiftc XXXClub/Models/Site.swift XXXClub/Parser/XCParser.swift Tests/ParserRegression/main.swift -o /tmp/xc-parser-tests
           /tmp/xc-parser-tests Tests/ParserRegression/Fixtures/*.html
 
+      - name: Run production Swift 115 identity regression tests
+        run: |
+          set -euo pipefail
+          swiftc XXXClub/Services/Pan115Identity.swift Tests/Pan115Regression/main.swift -o /tmp/xc-115-tests
+          /tmp/xc-115-tests
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail

@@ -46,7 +46,7 @@ struct DetailView: View {
         .nestedListChrome()
         .task { await load() }
         .fullScreenCover(isPresented: $play115) {
-            Pan115PlayerView(movie: torrent ?? XCTorrent.placeholder(id: id), magnetURL: detail?.magnet)
+            Pan115PlayerView(movie: torrent ?? XCTorrent.placeholder(id: id), magnetURL: detail?.magnet, manifest: detail?.files.map(\.name) ?? [])
         }
     }
 
@@ -131,7 +131,7 @@ struct DetailView: View {
                     .frame(maxWidth: .infinity)
             }
             .xcGlassButton(prominent: true)
-            .disabled(detail?.magnet.isEmpty != false && !Pan115PlaybackCache.hasMagnet(id))
+            .disabled(detail?.magnet.isEmpty != false)
 
             HStack(spacing: 10) {
                 Button {

@@ -313,41 +313,48 @@ public final class Pan115Client: @unchecked Sendable {
         throw lastError
     }
 
-    /// 欧美标题会被 115 缩短成厂牌缩写加日期。先按 hash 搜，再按短名对，最后进离线目录。
+    /// Search results are candidates only; hash-bound task output and manifest take priority.
     public func findPlayable(
-        keyword: String,
-        infoHash: String,
-        cookie: String,
-        folderCID: String
+        keyword: String, infoHash: String, cookie: String, folderCID: String,
+        manifest: [String] = []
     ) async throws -> [FileItem] {
-        if !infoHash.isEmpty {
-            let hashed = (try? await searchFiles(keyword: infoHash, cookie: cookie, limit: 20)) ?? []
-            let videos = hashed.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
-            if !videos.isEmpty { return videos }
+        let hash = Pan115Identity.hash(infoHash)
+        if !hash.isEmpty {
+            let tasks = try await listOfflineTasks(cookie: cookie)
+            let exact = tasks.filter {
+                Pan115Identity.taskMatches(hash: hash, taskHash: $0.infoHash, taskURL: $0.url)
+            }
+            guard exact.count <= 1 else { throw Pan115Error.api("115 中存在多个同哈希任务，无法唯一确认资源") }
+            if let task = exact.first {
+                if task.isFailed { throw Pan115Error.taskFailed(task.name) }
+                // wp_path_id is a shared destination, NOT the torrent output directory.
+                if task.isDone, !task.fileID.isEmpty, task.fileID != folderCID {
+                    let output = try await listFiles(cid: task.fileID, cookie: cookie, limit: 500)
+                    let videos = output.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
+                    let bound = videos.filter {
+                        Pan115Identity.manifestMatch($0.name, manifest: manifest)
+                            || (manifest.isEmpty && Pan115Identity.strictName($0.name, title: keyword))
+                    }
+                    if !bound.isEmpty { return bound }
+                }
+                // Never substitute an unrelated name hit while an exact task is running.
+                if task.isRunning { throw Pan115Error.fileNotFound }
+            }
         }
-        let queries = playQueries(keyword)
         var hits: [FileItem] = []
-        for query in queries {
-            let files = (try? await searchFiles(keyword: query, cookie: cookie, limit: 40)) ?? []
-            let matched = files.filter { file in
-                !file.isDir && file.isVideo && !file.pickCode.isEmpty && looseMatch(file.name, keyword: keyword)
-            }
-            let known = Set(hits.map { $0.fileID.isEmpty ? $0.pickCode : $0.fileID })
-            hits.append(contentsOf: matched.filter { !known.contains($0.fileID.isEmpty ? $0.pickCode : $0.fileID) })
-            if !hits.isEmpty { return hits.sorted { $0.size > $1.size } }
+        let queries = manifest.isEmpty ? [keyword] : manifest.map { ($0 as NSString).lastPathComponent }
+        for query in queries.prefix(30) {
+            let files = try await searchFiles(keyword: query, cookie: cookie, limit: 100)
+            hits.append(contentsOf: files.filter {
+                !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty
+                    && (manifest.isEmpty ? Pan115Identity.strictName($0.name, title: keyword)
+                        : (Pan115Identity.manifestMatch($0.name, manifest: manifest)
+                            && Pan115Identity.strictName($0.name, title: keyword)))
+            })
         }
-        if !folderCID.isEmpty {
-            let listed = (try? await listFiles(cid: folderCID, cookie: cookie, limit: 500)) ?? []
-            let dirs = listed.filter(\.isDir)
-            for dir in dirs.prefix(12) where looseMatch(dir.name, keyword: keyword) || (!infoHash.isEmpty && dir.name.lowercased().contains(infoHash.prefix(8))) {
-                let nested = (try? await listFiles(cid: dir.fileID.isEmpty ? dir.cid : dir.fileID, cookie: cookie, limit: 200)) ?? []
-                let videos = nested.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
-                if !videos.isEmpty { return videos.sorted { $0.size > $1.size } }
-            }
-            let videos = listed.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty && looseMatch($0.name, keyword: keyword) }
-            if !videos.isEmpty { return videos.sorted { $0.size > $1.size } }
-        }
-        throw Pan115Error.fileNotFound
+        let result = hits.uniquedFiles
+        guard !result.isEmpty else { throw Pan115Error.fileNotFound }
+        return result
     }
 
     private func playQueries(_ raw: String) -> [String] {
@@ -372,18 +379,7 @@ public final class Pan115Client: @unchecked Sendable {
     }
 
     private func looseMatch(_ filename: String, keyword: String) -> Bool {
-        let name = normalizedKey(filename)
-        let key = normalizedKey(keyword)
-        if !key.isEmpty, name.contains(key) || key.contains(name), name.count >= 8 { return true }
-        let words = keyword.split { !$0.isLetter && !$0.isNumber }.map(String.init)
-        let studio = (words.first { $0.first?.isLetter == true && $0.count >= 4 } ?? "")
-        let shorts = [String(studio.prefix(3)), studioInitials(studio)]
-            .map { $0.lowercased() }
-            .filter { $0.count >= 2 }
-        let nums = words.filter { $0.allSatisfy(\.isNumber) && ($0.count == 2 || $0.count >= 4) }.map { $0.lowercased() }
-        guard shorts.contains(where: { name.contains($0) }) else { return false }
-        let hit = nums.filter { name.contains($0) }
-        return hit.count >= min(3, nums.count)
+        Pan115Identity.strictName(filename, title: keyword)
     }
 
     /// PornMegaLoad → pml。115 经常用这种缩写命名离线文件。
@@ -759,21 +755,13 @@ public final class Pan115Client: @unchecked Sendable {
     }
 
     private func pickVideo(from files: [FileItem], keyword: String?, requireMatch: Bool) -> FileItem? {
-        var videos = files.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty }
-        if videos.isEmpty {
-            videos = files.filter { !$0.isDir && !$0.pickCode.isEmpty && $0.size > 10_000_000 }
+        guard let keyword, !keyword.isEmpty else { return nil }
+        let hits = files.filter {
+            !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty
+                && Pan115Identity.strictName($0.name, title: keyword)
         }
-        let scored: [FileItem]
-        if let keyword, !keyword.isEmpty {
-            let hits = videos.filter { file in
-                nameMatches(file.name, keyword: keyword)
-            }
-            scored = hits.isEmpty && !requireMatch ? videos : hits
-        } else {
-            if requireMatch { return nil }
-            scored = videos
-        }
-        return scored.max(by: { score($0) < score($1) })
+        // Single-file helpers must not silently choose the biggest of ambiguous hits.
+        return hits.count == 1 ? hits[0] : nil
     }
 
     /// 排除 trailer/sample/preview，大文件优先（对齐 Forward 模块 scoreWesternFile）
@@ -828,20 +816,7 @@ public final class Pan115Client: @unchecked Sendable {
 
     /// 欧美文件名常被截短，不能要求整串番号都出现在文件名里。
     private func nameMatches(_ filename: String, keyword: String) -> Bool {
-        let name = normalizedKey(filename)
-        let key = normalizedKey(keyword)
-        if key.isEmpty || name.isEmpty { return false }
-        if name.contains(key) { return true }
-        guard keyword.contains(".") || keyword.contains(" ") else { return false }
-        let tokens = matchTokens(keyword)
-        let studio = tokens.first { ($0.first?.isLetter == true) && $0.count >= 3 }
-        let date = westernDateToken(tokens)
-        if let studio, name.contains(studio) {
-            if let date, name.contains(date) { return true }
-            let rest = tokens.filter { $0 != studio && $0.count >= 4 }
-            return rest.filter { name.contains($0) }.count >= 2
-        }
-        return false
+        Pan115Identity.strictName(filename, title: keyword)
     }
 
     private func matchTokens(_ raw: String) -> [String] {
