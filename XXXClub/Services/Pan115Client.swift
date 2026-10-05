@@ -326,8 +326,8 @@ public final class Pan115Client: @unchecked Sendable {
     ) async throws -> [FileItem] {
         var studioHits: [FileItem] = []
         let compact = Pan115Identity.semanticTokens(keyword).joined(separator: ".")
-        let queries = Array(([compact] + Pan115Identity.studioDateQueries(keyword)).prefix(5))
-        for query in queries {
+        let sceneQueries = Array(([compact] + Pan115Identity.studioDateQueries(keyword)).prefix(5))
+        for query in sceneQueries {
             try Task.checkCancellation()
             let files = (try? await searchFiles(keyword: query, cookie: cookie, limit: 100)) ?? []
             studioHits.append(contentsOf: files.filter {
