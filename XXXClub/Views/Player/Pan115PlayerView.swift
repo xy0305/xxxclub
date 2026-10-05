@@ -275,7 +275,7 @@ final class Pan115PlayerViewModel: ObservableObject {
         fileName = file.name
         status = "获取 115 播放地址…"
         let list = try await Pan115Client.shared.streamsForVideo(
-            pickCode: file.pickCode, cookie: cookie, filename: file.name)
+            pickCode: file.pickCode, cookie: cookie, filename: file.name, fileID: file.fileID, size: file.size)
         streams = list
         guard let best = list.first, let url = URL(string: best.url) else {
             throw Pan115Error.playURLNotFound

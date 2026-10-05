@@ -549,7 +549,7 @@ public final class Pan115Client: @unchecked Sendable {
     }
 
     /// Resolve source file independently of HLS, using this already identity-checked file's pickcode.
-    public func sourceStream(pickCode: String, cookie: String) async throws -> PlayStream {
+    public func sourceStream(pickCode: String, cookie: String, filename: String = "", fileID: String = "", size: Int64 = 0) async throws -> PlayStream {
         // Both POST download endpoints use m115 RSA, unlike the size-limited Web GET.
         let uid = Pan115Settings.extractUID(from: cookie) ?? ""
         let payload = try JSONSerialization.data(withJSONObject: ["pickcode": pickCode, "user_id": uid])
@@ -582,6 +582,13 @@ public final class Pan115Client: @unchecked Sendable {
             guard entries.count == 1, let entry = entries.first,
                   let url = Pan115PlaybackRouting.originalURL(["data": entry])
                     ?? (entry["url"] as? String).flatMap(Pan115PlaybackRouting.directURL) else { continue }
+            // Reject contradictory metadata; older Web responses may omit some fields.
+            let returnedName = stringValue(entry["file_name"] ?? entry["fn"])
+            let returnedID = stringValue(entry["file_id"] ?? entry["fid"])
+            let returnedSize = Int64(stringValue(entry["file_size"] ?? entry["fs"])) ?? 0
+            guard filename.isEmpty || returnedName.isEmpty || returnedName == filename,
+                  fileID.isEmpty || returnedID.isEmpty || returnedID == fileID,
+                  size == 0 || returnedSize == 0 || returnedSize == size else { continue }
             let headers = Pan115PlaybackRouting.downloadHeaders(url: url, response: http,
                 userAgent: request.value(forHTTPHeaderField: "User-Agent") ?? Self.safariUA)
             return PlayStream(name: "原文件（源文件）", url: url.absoluteString,
@@ -590,9 +597,9 @@ public final class Pan115Client: @unchecked Sendable {
         throw Pan115Error.playURLNotFound
     }
 
-    public func streamsForVideo(pickCode: String, cookie: String, filename: String) async throws -> [PlayStream] {
+    public func streamsForVideo(pickCode: String, cookie: String, filename: String, fileID: String = "", size: Int64 = 0) async throws -> [PlayStream] {
         // Source resolution must not be short-circuited by a successful HLS response.
-        let source = try? await sourceStream(pickCode: pickCode, cookie: cookie)
+        let source = try? await sourceStream(pickCode: pickCode, cookie: cookie, filename: filename, fileID: fileID, size: size)
         let transcodes = (try? await transcodeStreams(pickCode: pickCode, cookie: cookie, filename: filename)) ?? []
         let list = (source.map { [$0] } ?? []) + transcodes
         guard !list.isEmpty else { throw Pan115Error.playURLNotFound }

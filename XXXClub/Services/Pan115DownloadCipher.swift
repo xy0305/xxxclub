@@ -42,7 +42,14 @@ enum Pan115DownloadCipher {
             plain += block[(end+1)...]
         }
         guard plain.count >= 16 else { throw Failure.malformed }
-        let key = (0..<12).map { i in table[12*(11-i)] ^ (plain[i] &+ table[12*i]) }
-        return Data(xor(Array(xor(Array(plain.dropFirst(16)), key).reversed()), [0x8d,0xa5,0xa5,0x8d]))
+        var key = [UInt8]()
+        for i in 0..<12 {
+            let sum: UInt8 = plain[i] &+ table[12 * i]
+            let value: UInt8 = table[12 * (11 - i)] ^ sum
+            key.append(value)
+        }
+        let stage = xor(Array(plain.dropFirst(16)), key)
+        let reversed = Array(stage.reversed())
+        return Data(xor(reversed, [0x8d,0xa5,0xa5,0x8d]))
     }
 }
