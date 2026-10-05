@@ -17,4 +17,13 @@ check(cdn["Cookie"] == nil, "no credential leak to CDN")
 check(cdn["Referer"] == common["Referer"] && cdn["User-Agent"] == common["User-Agent"], "retain player routing headers")
 check(Pan115PlaybackRouting.headers(url: URL(string: "https://115.com/master.m3u8")!, common: common)["Cookie"] != nil, "115 HLS authentication")
 check(Pan115PlaybackRouting.headers(url: URL(string: "https://115.com.evil.example/movie.mp4")!, common: common)["Cookie"] == nil, "domain boundary")
+let tempName = String(repeating: "a", count: 32)
+let tempValue = String(repeating: "b", count: 32)
+let response = HTTPURLResponse(url: URL(string: "https://webapi.115.com/files/download")!, statusCode: 200, httpVersion: nil,
+    headerFields: ["Set-Cookie": "\(tempName)=\(tempValue); Path=/; Secure", "Cookie": "UID=account"])!
+let download = Pan115PlaybackRouting.downloadHeaders(url: URL(string: "https://cdn.115cdn.com/movie.mp4")!, response: response, userAgent: "download-agent")
+check(download["User-Agent"] == "download-agent", "generation UA preserved")
+check(download["Cookie"] == "\(tempName)=\(tempValue)", "only temporary download cookie")
+check(Pan115PlaybackRouting.downloadHeaders(url: URL(string: "https://115cdn.com.evil.example/video")!, response: response, userAgent: "a")["Cookie"] == nil, "temporary cookie host boundary")
+check(Pan115PlaybackRouting.downloadHeaders(url: URL(string: "http://cdn.115cdn.com/video")!, response: response, userAgent: "a")["Cookie"] == nil, "temporary cookie HTTPS only")
 print("PASS: \(count) production playback routing assertions")

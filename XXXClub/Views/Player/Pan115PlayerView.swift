@@ -134,6 +134,9 @@ final class Pan115PlayerViewModel: ObservableObject {
 
     var headers: [String: String] {
         guard let url = playURL else { return [:] }
+        if let stream = streams.first(where: { $0.url == url.absoluteString }), stream.isOriginal {
+            return stream.playbackHeaders
+        }
         return Pan115PlaybackRouting.headers(url: url,
             common: Pan115Client.playHeaders(cookie: Pan115Settings.shared.cookie))
     }

@@ -188,6 +188,7 @@ public final class Pan115Client: @unchecked Sendable {
         public let url: String
         public let bandwidth: Int
         public var isOriginal = false
+        public var playbackHeaders: [String: String] = [:]
     }
 
     /// 轮询离线任务直到完成（默认 90 秒）
@@ -549,23 +550,42 @@ public final class Pan115Client: @unchecked Sendable {
 
     /// Resolve source file independently of HLS, using this already identity-checked file's pickcode.
     public func sourceStream(pickCode: String, cookie: String) async throws -> PlayStream {
-        let endpoints = [
-            "https://webapi.115.com/files/download?pickcode=\(pickCode.formEncoded)",
-            "https://115vod.com/webapi/files/video?pickcode=\(pickCode.formEncoded)&local=1",
-            "https://webapi.115.com/files/video?pickcode=\(pickCode.formEncoded)&local=1",
-        ]
-        for endpoint in endpoints {
+        // Both POST download endpoints use m115 RSA, unlike the size-limited Web GET.
+        let uid = Pan115Settings.extractUID(from: cookie) ?? ""
+        let payload = try JSONSerialization.data(withJSONObject: ["pickcode": pickCode, "user_id": uid])
+        let encrypted = try Pan115DownloadCipher.encrypt(payload)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.timeoutIntervalForRequest = 15
+        let downloadSession = URLSession(configuration: configuration)
+        defer { downloadSession.invalidateAndCancel() }
+        for endpoint in ["https://webapi.115.com/files/download", "https://proapi.115.com/app/chrome/downurl"] {
             var request = URLRequest(url: URL(string: endpoint)!)
             appendCommonHeaders(&request, cookie: cookie)
-            if let object = try? await json(for: request) {
-                let payload = object["data"] as? [String: Any] ?? object
-                let download = endpoint.contains("/files/download?")
-                    ? (payload["url"] as? String).flatMap(Pan115PlaybackRouting.directURL) : nil
-                if (object["state"] as? Bool) != false,
-                   let url = Pan115PlaybackRouting.originalURL(object) ?? download {
-                    return PlayStream(name: "原文件（源文件）", url: url.absoluteString, bandwidth: 0, isOriginal: true)
-                }
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            request.httpShouldHandleCookies = false
+            request.httpBody = Data("data=\(encrypted.formEncoded)".utf8)
+            guard let (data, response) = try? await downloadSession.data(for: request),
+                  let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (object["state"] as? Bool) == true else { continue }
+            var decoded = object["data"] as? [String: Any]
+            if let cipher = object["data"] as? String,
+               let plain = try? Pan115DownloadCipher.decrypt(cipher) {
+                decoded = try? JSONSerialization.jsonObject(with: plain) as? [String: Any]
             }
+            guard let body = decoded else { continue }
+            let entries = (body["url"] != nil || body["file_url"] != nil) ? [body] : body.values.compactMap { $0 as? [String: Any] }
+            // Single-pickcode requests must resolve to exactly one file, not an arbitrary map entry.
+            guard entries.count == 1, let entry = entries.first,
+                  let url = Pan115PlaybackRouting.originalURL(["data": entry])
+                    ?? (entry["url"] as? String).flatMap(Pan115PlaybackRouting.directURL) else { continue }
+            let headers = Pan115PlaybackRouting.downloadHeaders(url: url, response: http,
+                userAgent: request.value(forHTTPHeaderField: "User-Agent") ?? Self.safariUA)
+            return PlayStream(name: "原文件（源文件）", url: url.absoluteString,
+                bandwidth: 0, isOriginal: true, playbackHeaders: headers)
         }
         throw Pan115Error.playURLNotFound
     }
