@@ -169,7 +169,16 @@ enum Pan115Identity {
     static func folderVideo(_ filename: String, title: String) -> Bool {
         let words = semanticTokens(filename)
         guard !tokens(filename).contains("sample"), !words.isEmpty else { return false }
-        if release(filename) != nil { return distinguishedName(filename, title: title) }
+        if let file = release(filename) {
+            if distinguishedName(filename, title: title) { return true }
+            // A unique trusted folder supplies the plot. Its video may keep only
+            // studio, release date, and actor, but those fields cannot conflict.
+            guard let item = release(title) else { return false }
+            let actors = semanticTokens(item.tail.joined(separator: ".")).prefix { !$0.contains(where: \.isNumber) }
+            let fileActors = semanticTokens(file.tail.joined(separator: ".")).prefix { !$0.contains(where: \.isNumber) }
+            return file.studio == item.studio && file.date == item.date
+                && !actors.isEmpty && Array(fileActors) == Array(actors)
+        }
         // A trusted scene folder may support actor-only or generic main filenames,
         // but unknown scene/studio/date information must never be discarded.
         guard let item = release(title) else { return false }
