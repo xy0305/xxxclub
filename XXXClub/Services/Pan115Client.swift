@@ -391,12 +391,35 @@ public final class Pan115Client: @unchecked Sendable {
         }
     }
 
+    /// The detail file list already contains the real video name. Search that
+    /// before guessing from the long release title.
+    private func manifestVideos(manifest: [String], cookie: String) async throws -> [FileItem]? {
+        let names = manifest.map { ($0 as NSString).lastPathComponent }.filter { name in
+            let lower = name.lowercased()
+            return [".mp4", ".mkv", ".avi", ".mov", ".wmv"].contains { lower.hasSuffix($0) }
+        }
+        guard !names.isEmpty else { return nil }
+        var hits: [FileItem] = []
+        for name in names.prefix(8) {
+            try Task.checkCancellation()
+            let stem = (name as NSString).deletingPathExtension
+            let files = (try? await searchFiles(keyword: stem, cookie: cookie, limit: 40)) ?? []
+            hits.append(contentsOf: files.filter {
+                !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty
+                    && Pan115Identity.sameFileName($0.name, name)
+            })
+        }
+        let result = hits.uniquedFiles
+        return result.isEmpty ? nil : result
+    }
+
     /// Studio + RELEASE date selects candidates first, never proves playback identity.
     public func findPlayable(
         keyword: String, infoHash: String, cookie: String, folderCID: String,
         manifest: [String] = []
     ) async throws -> [FileItem] {
         do {
+            if let direct = try await manifestVideos(manifest: manifest, cookie: cookie) { return direct }
             if let videos = try await sceneFolderVideos(keyword: keyword, cookie: cookie) { return videos }
         } catch {
             // Directory discovery is optional; cancellation must never become fallback.

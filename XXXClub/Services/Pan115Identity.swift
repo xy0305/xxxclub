@@ -2,6 +2,14 @@ import Foundation
 
 /// Pure identity policy shared by production playback and Swift CI regressions.
 enum Pan115Identity {
+    static func sameFileName(_ found: String, _ wanted: String) -> Bool {
+        let a = (found as NSString).lastPathComponent.lowercased()
+        let b = (wanted as NSString).lastPathComponent.lowercased()
+        if a == b { return true }
+        let stem = (b as NSString).deletingPathExtension
+        return !stem.isEmpty && (a as NSString).deletingPathExtension == stem
+    }
+
     static func hash(_ value: String) -> String {
         let raw = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if raw.range(of: "^[a-f0-9]{40}$", options: .regularExpression) != nil { return raw }
