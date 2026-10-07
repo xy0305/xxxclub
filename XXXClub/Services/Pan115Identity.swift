@@ -6,9 +6,13 @@ enum Pan115Identity {
         let a = (found as NSString).lastPathComponent.lowercased()
         let b = (wanted as NSString).lastPathComponent.lowercased()
         if a == b { return true }
-        let foundStem = (a as NSString).deletingPathExtension
-        let wantedStem = (b as NSString).deletingPathExtension
-        return !foundStem.isEmpty && !wantedStem.isEmpty && foundStem == wantedStem
+        func stem(_ value: String) -> String {
+            let ext = (value as NSString).pathExtension
+            return ["mp4", "mkv", "avi", "mov", "wmv"].contains(ext) ? (value as NSString).deletingPathExtension : value
+        }
+        let foundStem = stem(a)
+        let wantedStem = stem(b)
+        return !foundStem.isEmpty && foundStem == wantedStem
     }
 
     static func hash(_ value: String) -> String {
