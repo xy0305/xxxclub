@@ -193,6 +193,11 @@ final class Pan115PlayerViewModel: ObservableObject {
             } catch Pan115Error.fileNotFound { existing = [] }
             if !existing.isEmpty {
                 episodes = existing
+                if existing.count > 1, existing.contains(where: { file in manifest.contains { Pan115Identity.sameFileName(file.name, $0) } }) {
+                    let index = existing.firstIndex { file in manifest.contains { Pan115Identity.sameFileName(file.name, $0) } } ?? 0
+                    try await play(file: existing[index], cookie: cookie)
+                    return
+                }
                 guard existing.count == 1, mayAutoplay(existing[0], keyword: keyword, manifest: manifest) else {
                     throw Pan115Error.api("候选文件尚未唯一确认身份，请关闭提示后手动选择文件；不会自动播放")
                 }

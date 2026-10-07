@@ -409,8 +409,19 @@ public final class Pan115Client: @unchecked Sendable {
                     && Pan115Identity.sameFileName($0.name, name)
             })
         }
-        let result = hits.uniquedFiles
-        return result.isEmpty ? nil : result
+        let matches = hits.uniquedFiles
+        guard !matches.isEmpty else { return nil }
+        let folderIDs = Array(Set(matches.map(\.cid).filter { !$0.isEmpty })).prefix(4)
+        var siblings: [FileItem] = []
+        for cid in folderIDs {
+            try Task.checkCancellation()
+            let listed = (try? await listFiles(cid: cid, cookie: cookie, limit: 200)) ?? []
+            siblings.append(contentsOf: listed.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty })
+        }
+        let videos = (siblings.isEmpty ? matches : siblings).uniquedFiles
+        return videos.count > 1
+            ? videos.map { var item = $0; item.requiresManualSelection = false; return item }
+            : videos
     }
 
     /// Studio + RELEASE date selects candidates first, never proves playback identity.
