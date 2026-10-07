@@ -6,8 +6,9 @@ enum Pan115Identity {
         let a = (found as NSString).lastPathComponent.lowercased()
         let b = (wanted as NSString).lastPathComponent.lowercased()
         if a == b { return true }
-        let stem = (b as NSString).deletingPathExtension
-        return !stem.isEmpty && (a as NSString).deletingPathExtension == stem
+        let foundStem = (a as NSString).deletingPathExtension
+        let wantedStem = (b as NSString).deletingPathExtension
+        return !foundStem.isEmpty && !wantedStem.isEmpty && foundStem == wantedStem
     }
 
     static func hash(_ value: String) -> String {
