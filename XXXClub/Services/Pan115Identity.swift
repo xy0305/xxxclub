@@ -175,9 +175,9 @@ enum Pan115Identity {
             // studio, release date, and actor, but those fields cannot conflict.
             guard let item = release(title) else { return false }
             let actors = semanticTokens(item.tail.joined(separator: ".")).prefix { !$0.contains(where: \.isNumber) }
-            let fileActors = semanticTokens(file.tail.joined(separator: ".")).prefix { !$0.contains(where: \.isNumber) }
+            let fileTail = semanticTokens(file.tail.joined(separator: "."))
             return file.studio == item.studio && file.date == item.date
-                && !actors.isEmpty && Array(fileActors) == Array(actors)
+                && !actors.isEmpty && fileTail == Array(actors)
         }
         // A trusted scene folder may support actor-only or generic main filenames,
         // but unknown scene/studio/date information must never be discarded.
